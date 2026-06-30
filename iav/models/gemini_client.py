@@ -153,6 +153,20 @@ class GeminiClient:
         response = self._generate(model=model, contents=contents)
         return _extract(response)
 
+    def generate_text(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        response_mime_type: str | None = None,
+    ) -> GenerationResult:
+        """Plain text-in / text-out call. Used e.g. for transcript cleanup."""
+        cfg = None
+        if response_mime_type:
+            cfg = genai_types.GenerateContentConfig(response_mime_type=response_mime_type)
+        response = self._generate(model=model, contents=prompt, config=cfg)
+        return _extract(response)
+
     def synthesize_speech(
         self,
         *,
