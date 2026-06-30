@@ -5,11 +5,12 @@
 # This is the abstraction layer that absorbs Google's deprecation cadence.
 
 vertex_ai:
-  # project_id and location are auto-read from the service account JSON if
-  # GOOGLE_APPLICATION_CREDENTIALS is set. Override here to pin a different
-  # project or region for this app.
+  # project_id is auto-read from the service account JSON if set.
+  # location should be 'global' for most Gemini models on Vertex AI; some
+  # models are region-pinned and may only work in 'us-central1' or 'us-east1'.
+  # Override via env: PROJECT_ID, GEMINI_LOCATION.
   project_id: null
-  location: us-central1
+  location: global
 
 logging:
   level: INFO
@@ -22,9 +23,14 @@ retry:
 capabilities:
 
   image_enhance:
-    # Nano Banana Pro — strongest image-edit model with accurate text rendering.
-    # Critical for exam diagrams where labels and numbers must remain exact.
-    model: gemini-3-pro-image
+    # Gemini image-edit model. Vertex AI projects need to be allowlisted for
+    # specific image-gen models — if you get NOT_FOUND, try one of the
+    # alternatives below.
+    # Alternatives (uncomment one):
+    #   model: gemini-3-pro-image        # Nano Banana Pro (Stable, may require allowlist)
+    #   model: gemini-3.1-flash-image    # Nano Banana 2 (Stable, may require allowlist)
+    #   model: gemini-2.5-flash-image-preview  # Nano Banana original (Preview, broadest availability)
+    model: gemini-2.5-flash-image-preview
     resolution: "2K"
     default_instruction: |
       Re-render this hand-drawn diagram as a clean, professional illustration
