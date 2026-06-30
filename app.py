@@ -187,11 +187,21 @@ def _render_audio_output(result) -> None:  # type: ignore[no-untyped-def]
 
 
 def _render_questions_output(result) -> None:  # type: ignore[no-untyped-def]
-    st.success("Done.")
+    meta = result.metadata or {}
+    st.success(f"Done — generated {meta.get('question_count', '?')} questions.")
+    if result.text:
+        st.markdown(result.text)
     if result.data:
-        st.json(result.data)
-    elif result.text:
-        st.code(result.text)
+        with st.expander("Raw JSON"):
+            st.json(result.data)
+    if result.file_path:
+        with result.file_path.open("rb") as fh:
+            st.download_button(
+                "Download JSON",
+                data=fh.read(),
+                file_name=result.file_path.name,
+                mime="application/json",
+            )
 
 
 def _render_video_output(result) -> None:  # type: ignore[no-untyped-def]

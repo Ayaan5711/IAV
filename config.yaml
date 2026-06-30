@@ -90,6 +90,10 @@ capabilities:
 
   video_to_questions:
     # Video understanding -> structured question/answer JSON.
+    # Override at runtime with the GEMINI_VIDEO_MODEL env var.
+    # Other models the project may have access to:
+    #   gemini-2.5-pro          # higher quality, slower, more expensive
+    #   gemini-3.5-flash        # newer family, if allowlisted
     model: gemini-2.5-flash
     default_question_count: 5
     default_question_type: mcq      # mcq | short_answer | conceptual
@@ -108,7 +112,7 @@ capabilities:
             "id": <int>,
             "type": "<question_type>",
             "stem": "<the question text>",
-            "options": ["A...", "B...", "C...", "D..."],  // mcq only
+            "options": ["A...", "B...", "C...", "D..."],   // mcq only
             "answer": "<the correct answer>",
             "explanation": "<one-sentence rationale>",
             "timestamp": "MM:SS",
