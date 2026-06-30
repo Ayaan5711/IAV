@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import mimetypes
+import os
 from pathlib import Path
 
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
@@ -42,7 +43,9 @@ class ImageEnhance(Capability):
         image_bytes = source.read_bytes()
         mime_type = _guess_mime(source)
         instruction = (payload.instruction or "").strip() or self._settings["default_instruction"]
-        model = self._settings["model"]
+        # Allow quick model swaps without editing config — handy while figuring
+        # out which image-gen model the Vertex project is allowlisted for.
+        model = os.environ.get("GEMINI_IMAGE_MODEL") or self._settings["model"]
 
         logger.info(
             "image_enhance: invoking model=%s on file=%s (%d bytes)",
