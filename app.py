@@ -170,13 +170,20 @@ def _render_audio_output(result) -> None:  # type: ignore[no-untyped-def]
     st.success("Done.")
     if result.file_path:
         st.audio(str(result.file_path))
+        mime = (result.metadata or {}).get("mime_type", "audio/wav")
         with result.file_path.open("rb") as fh:
             st.download_button(
                 "Download",
                 data=fh.read(),
                 file_name=result.file_path.name,
-                mime="audio/mpeg",
+                mime=mime,
             )
+        if result.metadata and result.metadata.get("raw_transcript"):
+            with st.expander("Transcript"):
+                st.text(result.metadata["raw_transcript"])
+            if result.metadata.get("cleaned_script") and result.metadata["cleaned_script"] != result.metadata["raw_transcript"]:
+                with st.expander("Cleaned script used for TTS"):
+                    st.text(result.metadata["cleaned_script"])
 
 
 def _render_questions_output(result) -> None:  # type: ignore[no-untyped-def]
