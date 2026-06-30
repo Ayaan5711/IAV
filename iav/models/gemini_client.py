@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -219,6 +218,12 @@ def _extract(response: Any) -> GenerationResult:
     return result
 
 
-@lru_cache(maxsize=1)
+_client_singleton: GeminiClient | None = None
+
+
 def get_client(config: Config | None = None) -> GeminiClient:
-    return GeminiClient(config or load_config())
+    """Module-level singleton. The first call wins; subsequent calls reuse it."""
+    global _client_singleton
+    if _client_singleton is None:
+        _client_singleton = GeminiClient(config or load_config())
+    return _client_singleton
