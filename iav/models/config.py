@@ -51,9 +51,29 @@ class Config:
 
 
 def _resolve_credentials_path() -> Path:
+    """Resolve the service account JSON path.
+
+    Honoured env vars (in priority order):
+      1. GOOGLE_APPLICATION_CREDENTIALS  (Google's standard)
+      2. GEMINI_CREDENTIALS              (path OR raw JSON content)
+
+    Falls back to .credentials/service-account.json in the repo root.
+    """
     env_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if env_path:
         return Path(env_path).expanduser()
+
+    gemini_creds = os.environ.get("GEMINI_CREDENTIALS")
+    if gemini_creds:
+        stripped = gemini_creds.strip()
+        if stripped.startswith("{"):
+            # Inline JSON content — write to .credentials/ so the SDK can read it.
+            inline_path = _DEFAULT_CREDS.parent / "service-account.json"
+            inline_path.parent.mkdir(parents=True, exist_ok=True)
+            inline_path.write_text(stripped, encoding="utf-8")
+            return inline_path
+        return Path(stripped).expanduser()
+
     return _DEFAULT_CREDS
 
 
@@ -68,13 +88,21 @@ def _read_credentials(path: Path) -> dict[str, Any]:
 
 
 def _resolve_vertex_settings(raw: dict[str, Any]) -> VertexConfig:
+    """Resolve project_id and location from env vars, config, or creds file.
+
+    Env vars honoured (each in priority order):
+      project_id: VERTEX_AI_PROJECT_ID -> PROJECT_ID -> config.yaml -> creds JSON
+      location:   VERTEX_AI_LOCATION   -> GEMINI_LOCATION -> config.yaml -> "us-central1"
+    """
     creds_path = _resolve_credentials_path()
     project_id = (
         os.environ.get("VERTEX_AI_PROJECT_ID")
+        or os.environ.get("PROJECT_ID")
         or raw.get("project_id")
     )
     location = (
         os.environ.get("VERTEX_AI_LOCATION")
+        or os.environ.get("GEMINI_LOCATION")
         or raw.get("location")
         or "us-central1"
     )
@@ -87,10 +115,10 @@ def _resolve_vertex_settings(raw: dict[str, Any]) -> VertexConfig:
 
     if not project_id:
         raise RuntimeError(
-            "Could not resolve Vertex AI project_id. Either set "
-            "VERTEX_AI_PROJECT_ID, fill vertex_ai.project_id in config.yaml, "
-            "or place the service account JSON at "
-            f"{_DEFAULT_CREDS} so project_id can be read from it."
+            "Could not resolve project_id. Set VERTEX_AI_PROJECT_ID or "
+            "PROJECT_ID, fill vertex_ai.project_id in config.yaml, or "
+            f"place the service account JSON at {_DEFAULT_CREDS} so "
+            "project_id can be read from it."
         )
 
     return VertexConfig(
