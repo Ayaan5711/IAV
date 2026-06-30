@@ -2,9 +2,10 @@
 
 from iav.storage.local import (
     inputs_dir,
+    output_path,
     outputs_dir,
     save_input,
     save_output,
 )
 
-__all__ = ["inputs_dir", "outputs_dir", "save_input", "save_output"]
+__all__ = ["inputs_dir", "output_path", "outputs_dir", "save_input", "save_output"]
