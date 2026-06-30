@@ -104,7 +104,7 @@ def _resolve_vertex_settings(raw: dict[str, Any]) -> VertexConfig:
         os.environ.get("VERTEX_AI_LOCATION")
         or os.environ.get("GEMINI_LOCATION")
         or raw.get("location")
-        or "us-central1"
+        or "global"
     )
 
     if not project_id:

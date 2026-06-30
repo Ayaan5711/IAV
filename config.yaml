@@ -23,14 +23,18 @@ retry:
 capabilities:
 
   image_enhance:
-    # Gemini image-edit model. Vertex AI projects need to be allowlisted for
+    # Image-edit model. Vertex AI projects need to be allowlisted for
     # specific image-gen models — if you get NOT_FOUND, try one of the
-    # alternatives below.
-    # Alternatives (uncomment one):
-    #   model: gemini-3-pro-image        # Nano Banana Pro (Stable, may require allowlist)
-    #   model: gemini-3.1-flash-image    # Nano Banana 2 (Stable, may require allowlist)
-    #   model: gemini-2.5-flash-image-preview  # Nano Banana original (Preview, broadest availability)
-    model: gemini-2.5-flash-image-preview
+    # alternatives below, or override on the fly with the GEMINI_IMAGE_MODEL
+    # env var (handy for testing what your project actually has access to).
+    #
+    # Alternatives, ordered by typical availability:
+    #   model: imagen-3.0-capability-001       # Imagen 3 edit/customize (most reliable)
+    #   model: gemini-2.5-flash-image          # Nano Banana on Vertex (no -preview suffix)
+    #   model: gemini-2.5-flash-image-preview  # Nano Banana Dev-API naming
+    #   model: gemini-3.1-flash-image          # Nano Banana 2 (Stable, may require allowlist)
+    #   model: gemini-3-pro-image              # Nano Banana Pro (Stable, may require allowlist)
+    model: imagen-3.0-capability-001
     resolution: "2K"
     default_instruction: |
       Re-render this hand-drawn diagram as a clean, professional illustration
