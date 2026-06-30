@@ -26,9 +26,9 @@ env/
 # Streamlit
 .streamlit/secrets.toml
 
-# Local data / outputs
-storage/
-outputs/
+# Local data / outputs (root-level only — iav/storage/ is the module)
+/storage/
+/outputs/
 samples/private/
 tmp/
 *.log
