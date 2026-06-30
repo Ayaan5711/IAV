@@ -1,0 +1,108 @@
+# Model IDs, prompts, and per-capability parameters.
+#
+# Business logic NEVER references a model ID directly — only capability names.
+# When Google deprecates a model, the change is a config edit, not a code edit.
+# This is the abstraction layer that absorbs Google's deprecation cadence.
+
+vertex_ai:
+  # project_id and location are auto-read from the service account JSON if
+  # GOOGLE_APPLICATION_CREDENTIALS is set. Override here to pin a different
+  # project or region for this app.
+  project_id: null
+  location: us-central1
+
+logging:
+  level: INFO
+
+retry:
+  attempts: 3
+  initial_wait_seconds: 1.5
+  max_wait_seconds: 30
+
+capabilities:
+
+  image_enhance:
+    # Nano Banana Pro — strongest image-edit model with accurate text rendering.
+    # Critical for exam diagrams where labels and numbers must remain exact.
+    model: gemini-3-pro-image
+    resolution: "2K"
+    default_instruction: |
+      Re-render this hand-drawn diagram as a clean, professional illustration
+      suitable for use in a printed question paper.
+
+      Hard constraints — these MUST be preserved exactly:
+      - Every label, number, variable, and unit must appear unchanged.
+      - All geometric relationships, angles, proportions, and connections must
+        remain the same as in the source.
+      - Do not add, remove, paraphrase, or correct any text or symbol.
+
+      Style:
+      - Clean black lines on a white background.
+      - Consistent line weight.
+      - Crisp, legible typography for any labels.
+      - No shading, decoration, or stylistic flourishes that were not in the
+        original sketch.
+
+  audio_text_to_speech:
+    # Gemini TTS path. Voice preset is a placeholder — needs sign-off from
+    # whoever owns the English curriculum before going to real users.
+    model: gemini-2.5-flash-preview-tts
+    voice_preset: Kore
+    output_format: mp3
+    sample_rate_hz: 24000
+    default_instruction: |
+      Read the following script clearly and at a measured, neutral pace,
+      suitable for a listen-and-repeat English assessment. Pronounce each
+      word precisely. Pause naturally at punctuation. Do not add commentary,
+      sound effects, or any text not in the script.
+
+  audio_to_audio:
+    # Hybrid pipeline: ASR (audio in, text out) -> optional cleanup -> TTS.
+    # Original speaker's voice is NOT preserved — output uses the voice preset.
+    asr_model: gemini-2.5-flash
+    tts_model: gemini-2.5-flash-preview-tts
+    voice_preset: Kore
+    output_format: mp3
+    sample_rate_hz: 24000
+    cleanup_transcript: true
+
+  video_to_questions:
+    # Video understanding -> structured question/answer JSON.
+    model: gemini-2.5-flash
+    default_question_count: 5
+    default_question_type: mcq      # mcq | short_answer | conceptual
+    default_level: undergraduate    # school | undergraduate | postgraduate
+    default_instruction: |
+      You are an experienced subject-matter expert generating exam-quality
+      questions from the video content provided.
+
+      Generate {count} {question_type} questions at the {level} level based
+      strictly on what the video covers. Do not invent facts not in the video.
+
+      Return ONLY a JSON object matching this schema:
+      {
+        "questions": [
+          {
+            "id": <int>,
+            "type": "<question_type>",
+            "stem": "<the question text>",
+            "options": ["A...", "B...", "C...", "D..."],  // mcq only
+            "answer": "<the correct answer>",
+            "explanation": "<one-sentence rationale>",
+            "timestamp": "MM:SS",
+            "difficulty": "easy" | "medium" | "hard"
+          }
+        ]
+      }
+
+  video_enhance:
+    # Conventional video pipeline does the actual enhancement;
+    # Gemini's role is analysis/issue flagging (text output).
+    analysis_model: gemini-2.5-flash
+    output_format: mp4
+    target_resolution: "1080p"
+    pipeline:
+      stabilize: true
+      light_color_correction: true
+      audio_cleanup: true
+      auto_captions: true

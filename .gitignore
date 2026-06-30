@@ -1,9 +1,11 @@
 # Credentials
-.credentials/
+.credentials/*
+!.credentials/README.md
 *.json.key
 service-account*.json
 .env
 .env.*
+!.env.example
 
 # Python
 __pycache__/
