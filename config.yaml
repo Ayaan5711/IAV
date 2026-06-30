@@ -106,9 +106,9 @@ capabilities:
       strictly on what the video covers. Do not invent facts not in the video.
 
       Return ONLY a JSON object matching this schema:
-      {
+      {{
         "questions": [
-          {
+          {{
             "id": <int>,
             "type": "<question_type>",
             "stem": "<the question text>",
@@ -117,9 +117,9 @@ capabilities:
             "explanation": "<one-sentence rationale>",
             "timestamp": "MM:SS",
             "difficulty": "easy" | "medium" | "hard"
-          }
+          }}
         ]
-      }
+      }}
 
   video_enhance:
     # Conventional video pipeline (ffmpeg) does the actual enhancement;
