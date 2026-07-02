@@ -20,85 +20,51 @@ retry:
   initial_wait_seconds: 1.5
   max_wait_seconds: 30
 
-# ----------------------------------------------------------------------
-# Pricing — used to estimate the dollar cost of every Gemini call.
-#
-# IMPORTANT — read before trusting a number from this table:
-#
-# Token counts shown in the UI are REAL: they come straight from each
-# API response's usage_metadata, exactly what Google's servers say was
-# billed for that call. Dollar amounts are ESTIMATES: real token counts
-# multiplied by the list-price rates below.
-#
-# Every model entry below carries a `verified` flag:
-#   verified: true  -> rate confirmed against Google's official Vertex AI
-#                       pricing page (cloud.google.com/vertex-ai/generative-ai/pricing)
-#                       as of `last_verified` below.
-#   verified: false -> could not be confirmed against an official Google
-#                       source at the time this was written (either not
-#                       listed on the pricing page, or the page couldn't
-#                       be reached). Treat as a rough placeholder — the UI
-#                       flags every estimate that uses one of these.
-#
-# Actual GCP invoices can differ from list price (committed-use discounts,
-# promotional credits, price changes since last_verified). This table is
-# for cost visibility during the POC, not for budget/billing decisions —
-# Cloud Billing console is the source of truth for what you're actually
-# charged.
+# Pricing used to estimate cost per call. Token counts shown in the UI are
+# real (from the API response); dollar amounts here are list-price
+# estimates. `verified: true` means confirmed against Google's official
+# Vertex AI pricing page as of `last_verified`; `false` means it couldn't
+# be confirmed and should be checked against Cloud Billing before trusting.
 pricing:
   last_verified: "2026-07-02"
   source_url: "https://cloud.google.com/vertex-ai/generative-ai/pricing"
 
   models:
-    # --- Image models ---------------------------------------------------
-    gemini-3.1-flash-image:            # Nano Banana 2 — the project's confirmed default
+    gemini-3.1-flash-image:    # Nano Banana 2 — current project default
       verified: true
       unit: per_million_tokens
-      input: 0.50                      # text/image/video input, combined rate
+      input: 0.50               # combined text/image/video input rate
       output_text: 3.00
       output_image: 60.00
 
-    gemini-3-pro-image:                # Nano Banana Pro
+    gemini-3-pro-image:        # Nano Banana Pro
       verified: true
       unit: per_million_tokens
       input: 2.00
       output_text: 12.00
       output_image: 120.00
 
-    gemini-2.5-flash-image:            # Nano Banana (original) — not separately
-      # listed on the pricing page at last check; using the 3.1 rate as an
-      # approximation. Confirm before relying on this for gemini-2.5-flash-image.
-      verified: false
+    gemini-2.5-flash-image:    # Nano Banana (original) — not on the pricing
+      verified: false          # page separately; using the 3.1 rate as a stand-in
       unit: per_million_tokens
       input: 0.50
       output_text: 3.00
       output_image: 60.00
 
-    imagen-3.0-capability-001:
-      # Imagen is billed per-image, not per-token. This calculator only
-      # supports per-token models today, so cost is not estimated for
-      # Imagen calls — token counts (if any) are still shown.
+    imagen-3.0-capability-001:  # billed per-image, not per-token — unsupported
       verified: false
       unit: per_image
 
-    # --- Gemini 2.5 Flash (text / ASR / video understanding) -----------
     gemini-2.5-flash:
-      verified: true                   # text/image/audio input + text output confirmed
+      verified: true
       unit: per_million_tokens
       input_text: 0.30
       input_image: 0.30
       input_audio: 1.00
-      input_video: 1.00                # NOT separately confirmed — video input isn't
-      # broken out on the Vertex pricing page for this model; using the audio
-      # rate as the closest documented modality (video = image frames + audio).
+      input_video: 1.00        # not separately listed — using the audio rate
       output_text: 2.50
 
-    # --- TTS --------------------------------------------------------------
-    gemini-2.5-flash-preview-tts:
-      # Could not confirm on an official Google pricing page at last check
-      # (not listed on cloud.google.com/vertex-ai/generative-ai/pricing).
-      # Figure below is from a secondary source and is NOT authoritative —
-      # confirm the real rate in Cloud Billing before trusting this number.
+    gemini-2.5-flash-preview-tts:  # not on the official pricing page; secondary source
       verified: false
       unit: per_million_tokens
       input_text: 0.50

@@ -59,30 +59,18 @@ def _show_config_status() -> bool:
 
 
 def _show_session_cost() -> None:
-    """Running total of estimated cost across every call this session."""
     with st.sidebar:
         st.markdown("### Session cost (estimated)")
         total = st.session_state.get("session_cost_usd", 0.0)
         st.metric("Total this session", f"${total:.6f}")
-        st.caption(
-            "Sum of per-call cost estimates below. Token counts are real "
-            "(from the API); dollar amounts are estimates from list-price "
-            "rates — some unverified (flagged per call). Not a substitute "
-            "for Cloud Billing."
-        )
+        st.caption("Token counts are real; dollar amounts are estimates. See Cloud Billing for actual charges.")
         if st.button("Reset session total", key="reset-session-cost"):
             st.session_state["session_cost_usd"] = 0.0
             st.rerun()
 
 
 def _render_cost(metadata: dict | None) -> None:
-    """Shared cost/token-usage display, shown under every result.
-
-    Token counts here are real — pulled straight from each call's API
-    response. Dollar amounts are estimates from the pricing table in
-    config.yaml; any call using an unverified rate is flagged explicitly
-    rather than blended silently into the total.
-    """
+    """Token usage + estimated cost, shown under every result."""
     cost = (metadata or {}).get("cost")
     if not cost:
         return
@@ -94,32 +82,29 @@ def _render_cost(metadata: dict | None) -> None:
 
     st.session_state["session_cost_usd"] = st.session_state.get("session_cost_usd", 0.0) + total
 
-    label = f"Cost — est. ${total:.6f} this call ({prompt_tok:,} in / {output_tok:,} out tokens)"
+    if calls and prompt_tok == 0 and output_tok == 0:
+        st.caption("⚠ No usage data returned by the API — cost could not be estimated for this call.")
+
+    label = f"Cost — est. ${total:.6f} ({prompt_tok:,} in / {output_tok:,} out tokens)"
     with st.expander(label, expanded=False):
         if cost.get("any_unverified"):
-            st.warning(
-                "One or more rates used below are UNVERIFIED against an "
-                "official Google source — treat those numbers as "
-                "directional, not authoritative."
-            )
+            st.warning("Some rates below are unverified against an official Google source.")
         for call in calls:
             badge = "verified" if call.get("verified") else "⚠ unverified"
             st.markdown(f"**{call.get('label', call.get('model'))}** — `{call.get('model')}` — {badge}")
             tok = call.get("tokens", {})
-            cols = st.columns(3)
+            cols = st.columns(4)
             cols[0].metric("Input tokens", f"{tok.get('prompt', 0):,}")
             cols[1].metric("Output tokens", f"{tok.get('output', 0):,}")
-            cols[2].metric("Est. cost", f"${call.get('usd', 0.0):.6f}")
-            breakdown = call.get("breakdown") or {}
-            if breakdown:
-                st.caption("Breakdown: " + ", ".join(f"{k}=${v:.6f}" for k, v in breakdown.items()))
+            cols[2].metric("Input cost", f"${call.get('input_usd', 0.0):.6f}")
+            cols[3].metric("Output cost", f"${call.get('output_usd', 0.0):.6f}")
             for note in call.get("notes", []):
                 st.caption(f"ℹ {note}")
             st.divider()
         last_verified = cost.get("pricing_last_verified")
         source = cost.get("pricing_source_url")
         if last_verified or source:
-            st.caption(f"Pricing table last verified: {last_verified or 'unknown'} — source: {source or 'n/a'}")
+            st.caption(f"Pricing last verified {last_verified or 'unknown'} — {source or 'n/a'}")
 
 
 def _capability_tab(

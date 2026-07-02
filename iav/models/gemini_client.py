@@ -213,7 +213,7 @@ class GeminiClient:
 
 
 def _extract(response: Any) -> GenerationResult:
-    """Pull text/image/audio bytes and real token usage out of a response."""
+    """Pull text/image/audio bytes and token usage out of a response."""
     result = GenerationResult(raw=response)
     candidates = getattr(response, "candidates", None) or []
     for candidate in candidates:
@@ -236,12 +236,6 @@ def _extract(response: Any) -> GenerationResult:
 
 
 def _extract_usage(response: Any) -> UsageInfo | None:
-    """Pull real token usage out of a response's usage_metadata.
-
-    This is the one place raw Google-reported token counts enter the
-    system — everything downstream (cost estimation, UI display) reads
-    from here, never re-derives or guesses a token count itself.
-    """
     meta = getattr(response, "usage_metadata", None)
     if meta is None:
         return None
