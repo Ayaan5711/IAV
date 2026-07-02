@@ -23,6 +23,7 @@ from pathlib import Path
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
+from iav.models.pricing import summarize_costs
 from iav.storage import save_output
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,7 @@ class AudioToAudio(Capability):
             )
 
         # 2. Optional cleanup -----------------------------------------------
+        cleaned = None
         if self._settings.get("cleanup_transcript", True):
             cleanup_instruction = self._settings.get("cleanup_instruction", "")
             logger.info("audio_to_audio: cleaning transcript")
@@ -128,7 +130,18 @@ class AudioToAudio(Capability):
             capability=self.name,
         )
 
-        logger.info("audio_to_audio: wrote %s (%d bytes)", output_path, len(wav_bytes))
+        calls = [{"label": "transcribe", "model": asr_model, "usage": asr_result.usage}]
+        if cleaned is not None:
+            calls.append({"label": "cleanup", "model": asr_model, "usage": cleaned.usage})
+        calls.append({"label": "synthesize", "model": tts_model, "usage": tts_result.usage})
+        cost = summarize_costs(calls, self.config.pricing)
+
+        logger.info(
+            "audio_to_audio: wrote %s (%d bytes, est. cost $%.6f)",
+            output_path,
+            len(wav_bytes),
+            cost["total_usd"],
+        )
 
         return CapabilityOutput(
             file_path=output_path,
@@ -143,6 +156,7 @@ class AudioToAudio(Capability):
                 "raw_transcript": transcript,
                 "cleaned_script": script,
                 "mime_type": "audio/wav",
+                "cost": cost,
             },
         )
 

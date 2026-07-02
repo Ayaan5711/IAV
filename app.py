@@ -15,6 +15,7 @@ from typing import Callable
 import streamlit as st
 
 from iav.capabilities import CapabilityInput
+from iav.capabilities.audio_question_generation import AudioQuestionGeneration
 from iav.capabilities.audio_text_to_speech import TextToSpeech
 from iav.capabilities.audio_to_audio import AudioToAudio
 from iav.capabilities.image_enhance import ImageEnhance
@@ -55,6 +56,55 @@ def _show_config_status() -> bool:
         st.caption(f"Location: `{cfg.vertex.location}`")
         st.caption(f"Credentials: `{cfg.vertex.credentials_path}`")
         return True
+
+
+def _show_session_cost() -> None:
+    with st.sidebar:
+        st.markdown("### Session cost (estimated)")
+        total = st.session_state.get("session_cost_usd", 0.0)
+        st.metric("Total this session", f"${total:.6f}")
+        st.caption("Token counts are real; dollar amounts are estimates. See Cloud Billing for actual charges.")
+        if st.button("Reset session total", key="reset-session-cost"):
+            st.session_state["session_cost_usd"] = 0.0
+            st.rerun()
+
+
+def _render_cost(metadata: dict | None) -> None:
+    """Token usage + estimated cost, shown under every result."""
+    cost = (metadata or {}).get("cost")
+    if not cost:
+        return
+
+    total = cost.get("total_usd", 0.0)
+    calls = cost.get("calls", [])
+    prompt_tok = cost.get("total_prompt_tokens", 0)
+    output_tok = cost.get("total_output_tokens", 0)
+
+    st.session_state["session_cost_usd"] = st.session_state.get("session_cost_usd", 0.0) + total
+
+    if calls and prompt_tok == 0 and output_tok == 0:
+        st.caption("⚠ No usage data returned by the API — cost could not be estimated for this call.")
+
+    label = f"Cost — est. ${total:.6f} ({prompt_tok:,} in / {output_tok:,} out tokens)"
+    with st.expander(label, expanded=False):
+        if cost.get("any_unverified"):
+            st.warning("Some rates below are unverified against an official Google source.")
+        for call in calls:
+            badge = "verified" if call.get("verified") else "⚠ unverified"
+            st.markdown(f"**{call.get('label', call.get('model'))}** — `{call.get('model')}` — {badge}")
+            tok = call.get("tokens", {})
+            cols = st.columns(4)
+            cols[0].metric("Input tokens", f"{tok.get('prompt', 0):,}")
+            cols[1].metric("Output tokens", f"{tok.get('output', 0):,}")
+            cols[2].metric("Input cost", f"${call.get('input_usd', 0.0):.6f}")
+            cols[3].metric("Output cost", f"${call.get('output_usd', 0.0):.6f}")
+            for note in call.get("notes", []):
+                st.caption(f"ℹ {note}")
+            st.divider()
+        last_verified = cost.get("pricing_last_verified")
+        source = cost.get("pricing_source_url")
+        if last_verified or source:
+            st.caption(f"Pricing last verified {last_verified or 'unknown'} — {source or 'n/a'}")
 
 
 def _capability_tab(
@@ -144,6 +194,7 @@ def _render_image_output(result) -> None:  # type: ignore[no-untyped-def]
             file_name=out_path.name,
             mime=result.metadata.get("mime_type", "image/png"),
         )
+    _render_cost(result.metadata)
 
 
 def _run_text_to_speech(text: str, instruction: str):
@@ -184,6 +235,7 @@ def _render_audio_output(result) -> None:  # type: ignore[no-untyped-def]
             if result.metadata.get("cleaned_script") and result.metadata["cleaned_script"] != result.metadata["raw_transcript"]:
                 with st.expander("Cleaned script used for TTS"):
                     st.text(result.metadata["cleaned_script"])
+    _render_cost(result.metadata)
 
 
 def _render_questions_output(result) -> None:  # type: ignore[no-untyped-def]
@@ -202,6 +254,7 @@ def _render_questions_output(result) -> None:  # type: ignore[no-untyped-def]
                 file_name=result.file_path.name,
                 mime="application/json",
             )
+    _render_cost(result.metadata)
 
 
 def _render_video_output(result) -> None:  # type: ignore[no-untyped-def]
@@ -225,6 +278,104 @@ def _render_video_output(result) -> None:  # type: ignore[no-untyped-def]
     if result.text:
         with st.expander("SRT captions"):
             st.code(result.text, language="text")
+    _render_cost(result.metadata)
+
+
+def _audio_questions_tab() -> None:
+    """Topic/passage -> narrated audio + text comprehension questions.
+
+    Bespoke rather than routed through _capability_tab: this capability
+    needs a mode selector (topic vs. pasted passage) plus explicit
+    count/type/level controls, which the other tabs don't expose.
+    """
+    st.subheader("Audio → Questions — topic or passage → narrated audio + questions")
+    st.caption(
+        "Give a topic and Gemini writes a passage, or paste your own passage/script. "
+        "Either way: narrated audio plus text comprehension questions with an answer key."
+    )
+
+    mode_label = st.radio(
+        "Input type",
+        ["Topic (Gemini writes the passage)", "My own passage/script"],
+        key="aq-mode",
+        horizontal=True,
+    )
+    mode = "topic" if mode_label.startswith("Topic") else "passage"
+
+    text_input = st.text_area(
+        "Topic" if mode == "topic" else "Passage / script",
+        height=140,
+        placeholder=(
+            "e.g. Photosynthesis"
+            if mode == "topic"
+            else "Paste the full passage or script text here…"
+        ),
+        key="aq-text",
+    )
+
+    col1, col2, col3 = st.columns(3)
+    count = col1.number_input("Number of questions", min_value=1, max_value=20, value=5, key="aq-count")
+    qtype = col2.selectbox("Question type", ["mcq", "short_answer", "conceptual"], key="aq-type")
+    level = col3.selectbox(
+        "Level", ["school", "undergraduate", "postgraduate"], index=1, key="aq-level"
+    )
+
+    instruction = st.text_area(
+        "Narration instruction (optional — leave blank to use the default)",
+        value="",
+        height=80,
+        key="aq-instruction",
+    )
+
+    if st.button("Process", type="primary", key="aq-go"):
+        if not (text_input or "").strip():
+            st.warning("Enter a topic or a passage first.")
+            return
+        try:
+            with st.spinner("Working…"):
+                cap = AudioQuestionGeneration()
+                result = cap.process(
+                    CapabilityInput(
+                        text=text_input,
+                        instruction=instruction,
+                        params={
+                            "mode": mode,
+                            "count": int(count),
+                            "type": qtype,
+                            "level": level,
+                        },
+                    )
+                )
+            _render_audio_questions_output(result)
+        except NotImplementedError as exc:
+            st.info(f"Not yet implemented: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Failed: {exc}")
+            with st.expander("Traceback"):
+                st.code(traceback.format_exc())
+
+
+def _render_audio_questions_output(result) -> None:  # type: ignore[no-untyped-def]
+    meta = result.metadata or {}
+    st.success(f"Done — generated {meta.get('question_count', '?')} questions.")
+    if meta.get("mode") == "topic" and meta.get("passage"):
+        with st.expander("Generated passage"):
+            st.write(meta["passage"])
+    if result.file_path:
+        st.audio(str(result.file_path))
+        with result.file_path.open("rb") as fh:
+            st.download_button(
+                "Download audio",
+                data=fh.read(),
+                file_name=result.file_path.name,
+                mime="audio/wav",
+            )
+    if result.text:
+        st.markdown(result.text)
+    if result.data:
+        with st.expander("Raw questions JSON"):
+            st.json(result.data)
+    _render_cost(meta)
 
 
 # ----------------------------------------------------------------------
@@ -236,6 +387,7 @@ st.title("IAV — Gemini Media Enhancement")
 st.caption("POC for SME content authoring. Built on Vertex AI.")
 
 _config_ok = _show_config_status()
+_show_session_cost()
 
 tabs = st.tabs([
     "Image",
@@ -243,6 +395,7 @@ tabs = st.tabs([
     "Audio → Audio",
     "Video → Questions",
     "Video → Professional",
+    "Audio → Questions",
 ])
 
 with tabs[0]:
@@ -313,3 +466,6 @@ with tabs[4]:
         run=_run_video_enhance,
         output_renderer=_render_video_output,
     )
+
+with tabs[5]:
+    _audio_questions_tab()

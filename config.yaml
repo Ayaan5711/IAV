@@ -20,7 +20,113 @@ retry:
   initial_wait_seconds: 1.5
   max_wait_seconds: 30
 
+# Pricing used to estimate cost per call. Token counts shown in the UI are
+# real (from the API response); dollar amounts here are list-price
+# estimates. `verified: true` means confirmed against Google's official
+# Vertex AI pricing page as of `last_verified`; `false` means it couldn't
+# be confirmed and should be checked against Cloud Billing before trusting.
+pricing:
+  last_verified: "2026-07-02"
+  source_url: "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+
+  models:
+    gemini-3.1-flash-image:    # Nano Banana 2 — current project default
+      verified: true
+      unit: per_million_tokens
+      input: 0.50               # combined text/image/video input rate
+      output_text: 3.00
+      output_image: 60.00
+
+    gemini-3-pro-image:        # Nano Banana Pro
+      verified: true
+      unit: per_million_tokens
+      input: 2.00
+      output_text: 12.00
+      output_image: 120.00
+
+    gemini-2.5-flash-image:    # Nano Banana (original) — not on the pricing
+      verified: false          # page separately; using the 3.1 rate as a stand-in
+      unit: per_million_tokens
+      input: 0.50
+      output_text: 3.00
+      output_image: 60.00
+
+    imagen-3.0-capability-001:  # billed per-image, not per-token — unsupported
+      verified: false
+      unit: per_image
+
+    gemini-2.5-flash:
+      verified: true
+      unit: per_million_tokens
+      input_text: 0.30
+      input_image: 0.30
+      input_audio: 1.00
+      input_video: 1.00        # not separately listed — using the audio rate
+      output_text: 2.50
+
+    gemini-2.5-flash-preview-tts:  # not on the official pricing page; secondary source
+      verified: false
+      unit: per_million_tokens
+      input_text: 0.50
+      output_audio: 10.00
+
 capabilities:
+
+  audio_question_generation:
+    # Topic OR pasted passage -> narrated audio + text comprehension questions.
+    #
+    # Two input modes (chosen in the UI):
+    #   topic:   a short phrase. Gemini writes an educational passage on it
+    #            first, then everything proceeds the same as 'passage' mode.
+    #   passage: the user supplies the full passage/script text directly —
+    #            no content-generation step, narration + questions only.
+    #
+    # Reuses the same TTS voice preset as the other audio capabilities and
+    # the same question schema as video_to_questions. Output questions are
+    # TEXT (read on screen), not narrated.
+    text_model: gemini-2.5-flash
+    tts_model: gemini-2.5-flash-preview-tts
+    voice_preset: Kore
+    sample_rate_hz: 24000
+    default_question_count: 5
+    default_question_type: mcq      # mcq | short_answer | conceptual
+    default_level: undergraduate    # school | undergraduate | postgraduate
+    passage_word_count: 150
+    passage_instruction: |
+      Write a clear, factually accurate educational passage of about
+      {word_count} words on the following topic, suitable for reading aloud
+      as a listening-comprehension exercise:
+
+      "{topic}"
+
+      Write only the passage text. No title, no headers, no commentary,
+      no markdown formatting.
+    questions_instruction: |
+      You are an experienced subject-matter expert generating exam-quality
+      listening-comprehension questions.
+
+      Based strictly on the passage below, generate {count} {question_type}
+      questions at the {level} level. Do not invent facts not in the passage.
+
+      Passage:
+      """
+      {passage}
+      """
+
+      Return ONLY a JSON object matching this schema:
+      {{
+        "questions": [
+          {{
+            "id": <int>,
+            "type": "<question_type>",
+            "stem": "<the question text>",
+            "options": ["A...", "B...", "C...", "D..."],   // mcq only
+            "answer": "<the correct answer>",
+            "explanation": "<one-sentence rationale>",
+            "difficulty": "easy" | "medium" | "hard"
+          }}
+        ]
+      }}
 
   image_enhance:
     # Nano Banana 2 — confirmed working on this Vertex AI project.

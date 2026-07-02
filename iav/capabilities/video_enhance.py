@@ -31,10 +31,11 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from iav.capabilities._json_utils import JsonParseError, parse_json_loose
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
-from iav.capabilities.video_to_questions import _parse_json_loose
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
+from iav.models.pricing import summarize_costs
 from iav.storage import output_path
 
 logger = logging.getLogger(__name__)
@@ -73,9 +74,11 @@ class VideoEnhance(Capability):
             work = Path(tmp)
             srt_path: Path | None = None
             segments: list[dict[str, Any]] = []
+            calls: list[dict[str, Any]] = []
 
             if pipeline.get("auto_captions", True):
-                segments = self._transcribe(model, source)
+                segments, transcribe_usage = self._transcribe(model, source)
+                calls.append({"label": "transcribe_captions", "model": model, "usage": transcribe_usage})
                 if segments:
                     srt_path = work / "captions.srt"
                     srt_path.write_text(_segments_to_srt(segments), encoding="utf-8")
@@ -91,7 +94,10 @@ class VideoEnhance(Capability):
 
             issues: str | None = None
             if pipeline.get("flag_issues", False):
-                issues = self._flag_issues(model, source)
+                issues, issues_usage = self._flag_issues(model, source)
+                calls.append({"label": "flag_issues", "model": model, "usage": issues_usage})
+
+            cost = summarize_costs(calls, self.config.pricing)
 
             out = output_path(".mp4", self.name)
             self._run_ffmpeg(
@@ -107,9 +113,10 @@ class VideoEnhance(Capability):
                 raise VideoEnhanceError("ffmpeg produced no output file.")
 
             logger.info(
-                "video_enhance: wrote %s (%d bytes)",
+                "video_enhance: wrote %s (%d bytes, est. cost $%.6f)",
                 out,
                 out.stat().st_size,
+                cost["total_usd"],
             )
 
             return CapabilityOutput(
@@ -129,6 +136,7 @@ class VideoEnhance(Capability):
                         k: bool(v)
                         for k, v in pipeline.items()
                     },
+                    "cost": cost,
                 },
             )
 
@@ -136,7 +144,7 @@ class VideoEnhance(Capability):
     # Gemini calls
     # ------------------------------------------------------------------
 
-    def _transcribe(self, model: str, source: Path) -> list[dict[str, Any]]:
+    def _transcribe(self, model: str, source: Path) -> tuple[list[dict[str, Any]], Any]:
         video_bytes = source.read_bytes()
         mime_type = _guess_video_mime(source)
         instruction = self._settings.get("transcript_instruction", "")
@@ -153,19 +161,17 @@ class VideoEnhance(Capability):
 
         raw_text = (result.text or "").strip()
         if not raw_text:
-            return []
+            return [], result.usage
         try:
-            parsed = _parse_json_loose(raw_text)
-        except Exception as exc:  # noqa: BLE001
-            raise VideoEnhanceError(
-                f"Could not parse transcript JSON: {exc}. First 400 chars: {raw_text[:400]}"
-            ) from exc
+            parsed = parse_json_loose(raw_text)
+        except JsonParseError as exc:
+            raise VideoEnhanceError(str(exc)) from exc
         segments = parsed.get("segments") if isinstance(parsed, dict) else None
         if not isinstance(segments, list):
-            return []
-        return [s for s in segments if isinstance(s, dict)]
+            return [], result.usage
+        return [s for s in segments if isinstance(s, dict)], result.usage
 
-    def _flag_issues(self, model: str, source: Path) -> str | None:
+    def _flag_issues(self, model: str, source: Path) -> tuple[str | None, Any]:
         video_bytes = source.read_bytes()
         mime_type = _guess_video_mime(source)
         prompt = (
@@ -184,8 +190,8 @@ class VideoEnhance(Capability):
             )
         except GeminiCallError as exc:
             logger.warning("Issue flagging failed: %s", exc)
-            return None
-        return (result.text or "").strip() or None
+            return None, None
+        return (result.text or "").strip() or None, result.usage
 
     # ------------------------------------------------------------------
     # ffmpeg

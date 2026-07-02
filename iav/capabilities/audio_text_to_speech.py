@@ -15,6 +15,7 @@ import wave
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
+from iav.models.pricing import summarize_costs
 from iav.storage import save_output
 
 logger = logging.getLogger(__name__)
@@ -75,8 +76,16 @@ class TextToSpeech(Capability):
             capability=self.name,
         )
 
+        cost = summarize_costs(
+            [{"label": "tts", "model": model, "usage": result.usage}],
+            self.config.pricing,
+        )
+
         logger.info(
-            "audio_text_to_speech: wrote %s (%d bytes)", output_path, len(wav_bytes)
+            "audio_text_to_speech: wrote %s (%d bytes, est. cost $%.6f)",
+            output_path,
+            len(wav_bytes),
+            cost["total_usd"],
         )
 
         return CapabilityOutput(
@@ -88,6 +97,7 @@ class TextToSpeech(Capability):
                 "sample_rate_hz": sample_rate,
                 "mime_type": "audio/wav",
                 "output_bytes": len(wav_bytes),
+                "cost": cost,
             },
         )
 
