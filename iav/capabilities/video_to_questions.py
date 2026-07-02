@@ -14,13 +14,13 @@ import json
 import logging
 import mimetypes
 import os
-import re
 from pathlib import Path
-from typing import Any
 
+from iav.capabilities._json_utils import JsonParseError, parse_json_loose, questions_as_markdown
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
+from iav.models.pricing import summarize_costs
 from iav.storage import save_output
 
 logger = logging.getLogger(__name__)
@@ -95,7 +95,10 @@ class VideoToQuestions(Capability):
                 "safety filter, or it exceeds the inline size limit."
             )
 
-        parsed = _parse_json_loose(raw_text)
+        try:
+            parsed = parse_json_loose(raw_text)
+        except JsonParseError as exc:
+            raise VideoToQuestionsError(str(exc)) from exc
         if not isinstance(parsed, dict) or "questions" not in parsed:
             raise VideoToQuestionsError(
                 "Model returned content that did not match the questions schema. "
@@ -114,16 +117,22 @@ class VideoToQuestions(Capability):
             capability=self.name,
         )
 
+        cost = summarize_costs(
+            [{"label": "video_understanding", "model": model, "usage": result.usage}],
+            self.config.pricing,
+        )
+
         logger.info(
-            "video_to_questions: wrote %s (%d questions)",
+            "video_to_questions: wrote %s (%d questions, est. cost $%.6f)",
             output_path,
             len(questions),
+            cost["total_usd"],
         )
 
         return CapabilityOutput(
             file_path=output_path,
             data=parsed,
-            text=_questions_as_markdown(questions),
+            text=questions_as_markdown(questions),
             metadata={
                 "model": model,
                 "input_file": str(source),
@@ -131,6 +140,7 @@ class VideoToQuestions(Capability):
                 "question_count": len(questions),
                 "params": {"count": count, "type": qtype, "level": level},
                 "mime_type": "application/json",
+                "cost": cost,
             },
         )
 
@@ -150,55 +160,3 @@ def _guess_video_mime(path: Path) -> str:
     if suffix in fallback:
         return fallback[suffix]
     raise ValueError(f"Unsupported video format: {path.suffix}")
-
-
-def _parse_json_loose(raw: str) -> Any:
-    """Parse JSON, tolerating a model that wrapped the output in a code fence."""
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        pass
-
-    # Strip ```json ... ``` fences if present.
-    fenced = re.search(r"```(?:json)?\s*(.+?)\s*```", raw, re.DOTALL)
-    if fenced:
-        try:
-            return json.loads(fenced.group(1))
-        except json.JSONDecodeError:
-            pass
-
-    # Last-ditch: grab the outermost {...} block.
-    brace = re.search(r"\{.*\}", raw, re.DOTALL)
-    if brace:
-        try:
-            return json.loads(brace.group(0))
-        except json.JSONDecodeError:
-            pass
-
-    raise VideoToQuestionsError(
-        "Could not parse the model output as JSON. First 400 chars: "
-        f"{raw[:400]}"
-    )
-
-
-def _questions_as_markdown(questions: list[dict[str, Any]]) -> str:
-    lines: list[str] = []
-    for i, q in enumerate(questions, start=1):
-        stem = q.get("stem") or q.get("question") or "(no stem)"
-        lines.append(f"**Q{i}.** {stem}")
-        opts = q.get("options")
-        if isinstance(opts, list) and opts:
-            for j, opt in enumerate(opts):
-                letter = chr(ord("A") + j)
-                lines.append(f"  - {letter}. {opt}")
-        ans = q.get("answer")
-        if ans is not None:
-            lines.append(f"**Answer:** {ans}")
-        expl = q.get("explanation")
-        if expl:
-            lines.append(f"_Explanation:_ {expl}")
-        ts = q.get("timestamp")
-        if ts:
-            lines.append(f"_Timestamp:_ `{ts}`")
-        lines.append("")
-    return "\n".join(lines)

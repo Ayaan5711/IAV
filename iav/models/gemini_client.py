@@ -24,6 +24,7 @@ from tenacity import (
 )
 
 from iav.models.config import Config, load_config
+from iav.models.pricing import UsageInfo
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ class GenerationResult:
     image_mime_type: str | None = None
     audio_bytes: bytes | None = None
     audio_mime_type: str | None = None
+    usage: UsageInfo | None = None
     raw: Any = None
 
 
@@ -211,7 +213,7 @@ class GeminiClient:
 
 
 def _extract(response: Any) -> GenerationResult:
-    """Pull text/image/audio bytes out of a generate_content response."""
+    """Pull text/image/audio bytes and real token usage out of a response."""
     result = GenerationResult(raw=response)
     candidates = getattr(response, "candidates", None) or []
     for candidate in candidates:
@@ -229,7 +231,39 @@ def _extract(response: Any) -> GenerationResult:
             text = getattr(part, "text", None)
             if text:
                 result.text = (result.text or "") + text
+    result.usage = _extract_usage(response)
     return result
+
+
+def _extract_usage(response: Any) -> UsageInfo | None:
+    """Pull real token usage out of a response's usage_metadata.
+
+    This is the one place raw Google-reported token counts enter the
+    system — everything downstream (cost estimation, UI display) reads
+    from here, never re-derives or guesses a token count itself.
+    """
+    meta = getattr(response, "usage_metadata", None)
+    if meta is None:
+        return None
+
+    def _modality_breakdown(details: Any) -> dict[str, int]:
+        breakdown: dict[str, int] = {}
+        for item in details or []:
+            modality = getattr(item, "modality", None)
+            count = getattr(item, "token_count", None)
+            if modality is None or count is None:
+                continue
+            key = getattr(modality, "value", str(modality))
+            breakdown[key] = breakdown.get(key, 0) + int(count)
+        return breakdown
+
+    return UsageInfo(
+        prompt_tokens=int(getattr(meta, "prompt_token_count", 0) or 0),
+        output_tokens=int(getattr(meta, "candidates_token_count", 0) or 0),
+        total_tokens=int(getattr(meta, "total_token_count", 0) or 0),
+        prompt_modality_breakdown=_modality_breakdown(getattr(meta, "prompt_tokens_details", None)),
+        output_modality_breakdown=_modality_breakdown(getattr(meta, "candidates_tokens_details", None)),
+    )
 
 
 _client_singleton: GeminiClient | None = None

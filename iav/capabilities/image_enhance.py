@@ -15,6 +15,7 @@ from pathlib import Path
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
+from iav.models.pricing import summarize_costs
 from iav.storage import save_output
 
 logger = logging.getLogger(__name__)
@@ -77,7 +78,17 @@ class ImageEnhance(Capability):
             capability=self.name,
         )
 
-        logger.info("image_enhance: wrote %s (%d bytes)", output_path, len(result.image_bytes))
+        cost = summarize_costs(
+            [{"label": "image_edit", "model": model, "usage": result.usage, "output_images": 1}],
+            self.config.pricing,
+        )
+
+        logger.info(
+            "image_enhance: wrote %s (%d bytes, est. cost $%.6f)",
+            output_path,
+            len(result.image_bytes),
+            cost["total_usd"],
+        )
 
         return CapabilityOutput(
             file_path=output_path,
@@ -88,6 +99,7 @@ class ImageEnhance(Capability):
                 "input_bytes": len(image_bytes),
                 "output_bytes": len(result.image_bytes),
                 "mime_type": result.image_mime_type,
+                "cost": cost,
             },
         )
 

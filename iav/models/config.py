@@ -42,6 +42,7 @@ class Config:
     vertex: VertexConfig
     retry: RetryConfig
     capabilities: dict[str, dict[str, Any]] = field(default_factory=dict)
+    pricing: dict[str, Any] = field(default_factory=dict)
     log_level: str = "INFO"
 
     def capability(self, name: str) -> dict[str, Any]:
@@ -150,5 +151,6 @@ def load_config(path: Path | None = None) -> Config:
         vertex=vertex,
         retry=retry,
         capabilities=raw.get("capabilities", {}) or {},
+        pricing=raw.get("pricing", {}) or {},
         log_level=log_level,
     )
