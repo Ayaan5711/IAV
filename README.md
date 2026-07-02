@@ -24,6 +24,27 @@ See [`docs/POC_PLAN.md`](docs/POC_PLAN.md) for the refined scope, architecture, 
 
 The underlying capability feasibility analysis (model availability, pricing, limitations) lives in the original feasibility document referenced in that plan.
 
+## System dependencies
+
+The **Video → Professional** capability runs an ffmpeg filter chain. Install
+ffmpeg before using that tab:
+
+- Linux: `sudo apt install ffmpeg`
+- macOS: `brew install ffmpeg`
+- Windows: download from <https://www.gyan.dev/ffmpeg/builds/> and add to PATH
+
+All other capabilities work without ffmpeg.
+
+## Running
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+# Drop your service account JSON at .credentials/service-account.json
+.venv/bin/streamlit run app.py
+```
+
 ## Status
 
-Planning phase. Implementation begins after the planning PR is reviewed.
+Phase 4 (Video → Professional) implemented. POC functionally complete pending
+end-to-end verification across all four capabilities.

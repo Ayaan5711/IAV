@@ -106,9 +106,9 @@ capabilities:
       strictly on what the video covers. Do not invent facts not in the video.
 
       Return ONLY a JSON object matching this schema:
-      {
+      {{
         "questions": [
-          {
+          {{
             "id": <int>,
             "type": "<question_type>",
             "stem": "<the question text>",
@@ -117,18 +117,46 @@ capabilities:
             "explanation": "<one-sentence rationale>",
             "timestamp": "MM:SS",
             "difficulty": "easy" | "medium" | "hard"
-          }
+          }}
+        ]
+      }}
+
+  video_enhance:
+    # Conventional video pipeline (ffmpeg) does the actual enhancement;
+    # Gemini's role is transcription (for captions) and optional issue
+    # flagging. SME's original voice is preserved — we denoise it, we
+    # don't regenerate it as TTS.
+    analysis_model: gemini-2.5-flash
+    output_format: mp4
+    pipeline:
+      stabilize: true                # ffmpeg deshake filter
+      light_color_correction: true   # subtle saturation + contrast bump
+      audio_denoise: true            # ffmpeg afftdn filter
+      auto_captions: true            # Gemini transcribes; burn SRT into video
+      flag_issues: false             # optional Gemini analysis pass
+    encoder:
+      video_codec: libx264
+      preset: medium                 # ultrafast | superfast | veryfast | faster | fast | medium | slow
+      crf: 22                        # lower = better quality, larger file
+      audio_codec: aac
+      audio_bitrate: 160k
+    captions:
+      font_size: 20
+      max_chars_per_line: 42
+    transcript_instruction: |
+      Transcribe this video's spoken content as a JSON object suitable for
+      generating subtitles. Return ONLY JSON in this exact shape, with no
+      preamble or commentary:
+
+      {
+        "segments": [
+          {"start": "MM:SS.mmm", "end": "MM:SS.mmm", "text": "..."},
+          ...
         ]
       }
 
-  video_enhance:
-    # Conventional video pipeline does the actual enhancement;
-    # Gemini's role is analysis/issue flagging (text output).
-    analysis_model: gemini-2.5-flash
-    output_format: mp4
-    target_resolution: "1080p"
-    pipeline:
-      stabilize: true
-      light_color_correction: true
-      audio_cleanup: true
-      auto_captions: true
+      Rules:
+      - Each segment is one short, readable subtitle line (max ~10 words).
+      - Timestamps must be in MM:SS.mmm format with millisecond precision.
+      - Segments must not overlap and must be in chronological order.
+      - Transcribe verbatim — do not paraphrase, summarise, or omit content.

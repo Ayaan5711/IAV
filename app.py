@@ -205,9 +205,26 @@ def _render_questions_output(result) -> None:  # type: ignore[no-untyped-def]
 
 
 def _render_video_output(result) -> None:  # type: ignore[no-untyped-def]
-    st.success("Done.")
+    meta = result.metadata or {}
+    msg_parts = ["Done."]
+    if meta.get("caption_count"):
+        msg_parts.append(f"{meta['caption_count']} caption segments burned in.")
+    st.success(" ".join(msg_parts))
     if result.file_path:
         st.video(str(result.file_path))
+        with result.file_path.open("rb") as fh:
+            st.download_button(
+                "Download MP4",
+                data=fh.read(),
+                file_name=result.file_path.name,
+                mime="video/mp4",
+            )
+    if meta.get("issues"):
+        with st.expander("Production issues flagged by Gemini"):
+            st.markdown(meta["issues"])
+    if result.text:
+        with st.expander("SRT captions"):
+            st.code(result.text, language="text")
 
 
 # ----------------------------------------------------------------------

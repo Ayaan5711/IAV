@@ -32,7 +32,15 @@ def save_input(data: bytes, suffix: str) -> Path:
     return target
 
 
+def output_path(suffix: str, capability: str) -> Path:
+    """Reserve a unique output path without writing anything to it.
+
+    Use when the writer (e.g. ffmpeg) wants to write the file itself.
+    """
+    return outputs_dir() / f"{capability}-{_stamped_name(suffix)}"
+
+
 def save_output(data: bytes, suffix: str, capability: str) -> Path:
-    target = outputs_dir() / f"{capability}-{_stamped_name(suffix)}"
+    target = output_path(suffix, capability)
     target.write_bytes(data)
     return target
