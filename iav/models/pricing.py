@@ -9,8 +9,11 @@ the source of truth for actual charges, not this module.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -64,6 +67,7 @@ def estimate_cost(
     }
 
     if entry is None:
+        logger.warning("No pricing entry for model '%s' -- cost not estimated for this call", model)
         return CostEstimate(
             model=model,
             usd=0.0,
@@ -119,6 +123,7 @@ def estimate_cost(
         input_usd = usage.prompt_tokens / 1_000_000 * entry["input_text"]
         breakdown["input_text"] = input_usd
     else:
+        logger.warning("No input rate configured for model '%s'", model)
         notes.append("No input rate found for this model.")
 
     if output_images > 0 and "output_image" in entry:
@@ -135,6 +140,7 @@ def estimate_cost(
         output_usd = usage.output_tokens / 1_000_000 * entry["output"]
         breakdown["output"] = output_usd
     else:
+        logger.warning("No output rate configured for model '%s'", model)
         notes.append("No output rate found for this model.")
 
     if not verified:
@@ -242,6 +248,11 @@ def summarize_costs(calls: list[dict[str, Any]], pricing_table: dict[str, Any]) 
         total_output_tokens += est.tokens.get("output", 0)
         if not est.verified:
             any_unverified = True
+
+    logger.debug(
+        "summarize_costs: %d call(s), total=$%.6f, unverified=%s",
+        len(calls), total, any_unverified,
+    )
 
     return {
         "total_usd": round(total, 6),

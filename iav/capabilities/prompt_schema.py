@@ -9,8 +9,11 @@ not a security boundary -- Gemini's own safety filters are the real gate.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 MAX_FIELD_LEN = 200
 MIN_FREE_TEXT_LEN = 3
@@ -59,7 +62,11 @@ def validate_text_field(
     for pattern in _INJECTION_PATTERNS:
         if pattern.search(stripped):
             errors.append(f"{name} contains a phrase that looks like an attempt to override instructions.")
+            logger.warning("Rejected '%s': matched injection pattern %r", name, pattern.pattern)
             break
+
+    if errors:
+        logger.info("Validation rejected '%s' (%d issue(s)): %s", name, len(errors), stripped[:80])
 
     return errors
 

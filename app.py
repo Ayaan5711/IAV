@@ -68,6 +68,7 @@ def _show_config_status() -> bool:
         try:
             cfg = load_config()
         except Exception as exc:  # noqa: BLE001 — we want to surface any config error
+            logger.exception("Config failed to load")
             st.error(f"Config error: {exc}")
             return False
 
@@ -185,6 +186,7 @@ def _capability_tab(
             st.warning("Enter some text first.")
             return
 
+        logger.info("Tab '%s': Process clicked", title)
         try:
             with st.spinner("Working…"):
                 if accept_types is not None:
@@ -195,8 +197,10 @@ def _capability_tab(
                     result = run(text_input, instruction, params)
             output_renderer(result)
         except NotImplementedError as exc:
+            logger.warning("Tab '%s': not yet implemented: %s", title, exc)
             st.info(f"Not yet implemented: {exc}")
         except Exception as exc:  # noqa: BLE001
+            logger.exception("Tab '%s': Process failed", title)
             st.error(f"Failed: {exc}")
             with st.expander("Traceback"):
                 st.code(traceback.format_exc())
@@ -475,6 +479,7 @@ def _audio_questions_tab() -> None:
         if not (text_input or "").strip():
             st.warning("Enter a topic or a passage first.")
             return
+        logger.info("Audio -> Questions: Process clicked (mode=%s)", mode)
         try:
             with st.spinner("Working…"):
                 cap = AudioQuestionGeneration()
@@ -494,8 +499,10 @@ def _audio_questions_tab() -> None:
                 )
             _render_audio_questions_output(result)
         except NotImplementedError as exc:
+            logger.warning("Audio -> Questions: not yet implemented: %s", exc)
             st.info(f"Not yet implemented: {exc}")
         except Exception as exc:  # noqa: BLE001
+            logger.exception("Audio -> Questions: Process failed")
             st.error(f"Failed: {exc}")
             with st.expander("Traceback"):
                 st.code(traceback.format_exc())
@@ -560,6 +567,7 @@ def _generate_image_tab() -> None:
         errors = validate_common_attributes(common) + validate_free_text(free_text)
         if not _show_validation_errors(errors):
             return
+        logger.info("Generate Image: clicked (visual_type=%s, style=%s)", visual_type, style)
         try:
             with st.spinner("Generating…"):
                 cap = ImageGenerate()
@@ -590,6 +598,7 @@ def _generate_image_tab() -> None:
                 st.text(result.metadata.get("prompt", ""))
             _render_cost(result.metadata)
         except Exception as exc:  # noqa: BLE001
+            logger.exception("Generate Image: failed")
             st.error(f"Failed: {exc}")
             with st.expander("Traceback"):
                 st.code(traceback.format_exc())
@@ -638,6 +647,7 @@ def _generate_audio_tab() -> None:
         errors = validate_common_attributes(common) + validate_free_text(free_text)
         if not _show_validation_errors(errors):
             return
+        logger.info("Generate Audio: clicked (multi_speaker=%s, accent=%s)", multi_speaker, accent)
         try:
             with st.spinner("Generating…"):
                 cap = AudioGenerate()
@@ -673,6 +683,7 @@ def _generate_audio_tab() -> None:
                 st.text(result.text or "")
             _render_cost(result.metadata)
         except Exception as exc:  # noqa: BLE001
+            logger.exception("Generate Audio: failed")
             st.error(f"Failed: {exc}")
             with st.expander("Traceback"):
                 st.code(traceback.format_exc())
@@ -714,6 +725,10 @@ def _generate_video_tab() -> None:
         errors = validate_common_attributes(common) + validate_free_text(free_text)
         if not _show_validation_errors(errors):
             return
+        logger.info(
+            "Generate Video: clicked (video_type=%s, resolution=%s, duration=%ds)",
+            video_type, resolution, duration,
+        )
         try:
             with st.spinner(f"Generating video — this can take a few minutes (Veo, up to {int(s.get('poll_timeout_seconds', 360))}s)…"):
                 cap = VideoGenerate()
@@ -743,6 +758,7 @@ def _generate_video_tab() -> None:
                 st.text(result.text or "")
             _render_cost(result.metadata)
         except Exception as exc:  # noqa: BLE001
+            logger.exception("Generate Video: failed")
             st.error(f"Failed: {exc}")
             with st.expander("Traceback"):
                 st.code(traceback.format_exc())

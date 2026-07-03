@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _ROOT = Path(__file__).resolve().parents[2] / "storage"
 
@@ -29,6 +32,7 @@ def _stamped_name(suffix: str) -> str:
 def save_input(data: bytes, suffix: str) -> Path:
     target = inputs_dir() / _stamped_name(suffix)
     target.write_bytes(data)
+    logger.debug("Saved input %s (%d bytes)", target, len(data))
     return target
 
 
@@ -43,4 +47,5 @@ def output_path(suffix: str, capability: str) -> Path:
 def save_output(data: bytes, suffix: str, capability: str) -> Path:
     target = output_path(suffix, capability)
     target.write_bytes(data)
+    logger.debug("Saved output %s (%d bytes)", target, len(data))
     return target

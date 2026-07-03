@@ -18,6 +18,7 @@ from typing import Any, Iterable
 from google import genai
 from google.genai import types as genai_types
 from tenacity import (
+    before_sleep_log,
     retry,
     retry_if_exception_type,
     stop_after_attempt,
@@ -102,6 +103,7 @@ class GeminiClient:
                 max=retry_cfg.max_wait_seconds,
             ),
             retry=retry_if_exception_type(Exception),
+            before_sleep=before_sleep_log(logger, logging.WARNING),
         )
         def _call() -> Any:
             return self._client.models.generate_content(
@@ -287,37 +289,55 @@ class GeminiClient:
             resolution=resolution,
             generate_audio=generate_audio,
         )
+        logger.info(
+            "generate_video: submitting model=%s duration=%ds resolution=%s",
+            model, duration_seconds, resolution,
+        )
         try:
             operation = self._client.models.generate_videos(model=model, prompt=prompt, config=config)
         except Exception as exc:
+            logger.exception("generate_video: submission failed (model=%s)", model)
             raise GeminiCallError(str(exc)) from exc
 
         elapsed = 0.0
         while not operation.done:
             if elapsed >= poll_timeout_seconds:
+                logger.error(
+                    "generate_video: timed out after %.0fs waiting on operation %s",
+                    elapsed, operation.name,
+                )
                 raise GeminiCallError(
                     f"Video generation did not finish within {poll_timeout_seconds:.0f}s "
                     "(it may still complete server-side; Veo latency can run up to several minutes)."
                 )
             time.sleep(poll_interval_seconds)
             elapsed += poll_interval_seconds
+            logger.debug("generate_video: polling operation %s (%.0fs elapsed)", operation.name, elapsed)
             try:
                 operation = self._client.operations.get(operation)
             except Exception as exc:
+                logger.exception("generate_video: polling failed after %.0fs", elapsed)
                 raise GeminiCallError(str(exc)) from exc
 
         if operation.error:
+            logger.error("generate_video: operation returned an error: %s", operation.error)
             raise GeminiCallError(f"Video generation failed: {operation.error}")
 
         result = operation.result or operation.response
         generated = (result.generated_videos or [None])[0] if result else None
         if generated is None or generated.video is None:
+            logger.error("generate_video: operation completed with no video in the response")
             raise GeminiCallError("Video generation completed but returned no video.")
 
         video = generated.video
         video_bytes = video.video_bytes
         if not video_bytes and video.uri:
+            logger.debug("generate_video: downloading video bytes from %s", video.uri)
             video_bytes = self._client.files.download(file=generated)
+
+        logger.info(
+            "generate_video: completed in %.0fs, %d bytes", elapsed, len(video_bytes or b"")
+        )
 
         gen_result = GenerationResult(raw=operation)
         gen_result.video_bytes = video_bytes

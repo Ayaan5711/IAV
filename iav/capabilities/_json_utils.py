@@ -6,8 +6,11 @@ audio_question_generation).
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class JsonParseError(RuntimeError):
@@ -24,17 +27,22 @@ def parse_json_loose(raw: str) -> Any:
     fenced = re.search(r"```(?:json)?\s*(.+?)\s*```", raw, re.DOTALL)
     if fenced:
         try:
-            return json.loads(fenced.group(1))
+            parsed = json.loads(fenced.group(1))
+            logger.debug("Recovered JSON from a code fence (model didn't return raw JSON)")
+            return parsed
         except json.JSONDecodeError:
             pass
 
     brace = re.search(r"\{.*\}", raw, re.DOTALL)
     if brace:
         try:
-            return json.loads(brace.group(0))
+            parsed = json.loads(brace.group(0))
+            logger.debug("Recovered JSON by extracting the outermost {...} block")
+            return parsed
         except json.JSONDecodeError:
             pass
 
+    logger.warning("Could not parse model output as JSON. First 400 chars: %s", raw[:400])
     raise JsonParseError(
         f"Could not parse the model output as JSON. First 400 chars: {raw[:400]}"
     )
