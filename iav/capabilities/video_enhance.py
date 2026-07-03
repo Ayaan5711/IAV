@@ -65,10 +65,11 @@ class VideoEnhance(Capability):
         if not source.exists():
             raise FileNotFoundError(f"Input video not found: {source}")
 
-        pipeline = self._settings.get("pipeline", {})
-        encoder = self._settings.get("encoder", {})
+        params = payload.params or {}
+        pipeline = {**self._settings.get("pipeline", {}), **params.get("pipeline", {})}
+        encoder = {**self._settings.get("encoder", {}), **params.get("encoder", {})}
         caption_cfg = self._settings.get("captions", {})
-        model = os.environ.get("GEMINI_VIDEO_MODEL") or self._settings["analysis_model"]
+        model = params.get("model") or os.environ.get("GEMINI_VIDEO_MODEL") or self._settings["analysis_model"]
 
         with tempfile.TemporaryDirectory(prefix="iav-video-") as tmp:
             work = Path(tmp)

@@ -51,9 +51,10 @@ class AudioToAudio(Capability):
 
         audio_bytes = source.read_bytes()
         mime_type = _guess_audio_mime(source)
-        asr_model = os.environ.get("GEMINI_ASR_MODEL") or self._settings["asr_model"]
-        tts_model = os.environ.get("GEMINI_TTS_MODEL") or self._settings["tts_model"]
-        voice = self._settings.get("voice_preset", "Kore")
+        params = payload.params or {}
+        asr_model = params.get("asr_model") or os.environ.get("GEMINI_ASR_MODEL") or self._settings["asr_model"]
+        tts_model = params.get("tts_model") or os.environ.get("GEMINI_TTS_MODEL") or self._settings["tts_model"]
+        voice = params.get("voice") or self._settings.get("voice_preset", "Kore")
         sample_rate = int(self._settings.get("sample_rate_hz", 24000))
 
         # 1. Transcribe ------------------------------------------------------
