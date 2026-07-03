@@ -44,11 +44,11 @@ pricing:
       output_text: 12.00
       output_image: 120.00
 
-    gemini-2.5-flash-image:    # Nano Banana (original) — not on the pricing
-      verified: false          # page separately; using the 3.1 rate as a stand-in
-      unit: per_million_tokens
-      input: 0.50
-      output_text: 3.00
+    gemini-2.5-flash-image:    # Nano Banana (original) — not on the official
+      verified: false          # pricing page; input/output_text below per an
+      unit: per_million_tokens # LLM-sourced estimate, output_image still a
+      input: 0.30              # placeholder (no confident figure given for it)
+      output_text: 2.50
       output_image: 60.00
 
     imagen-3.0-capability-001:  # billed per-image, not per-token
@@ -75,9 +75,9 @@ pricing:
       output_audio: 10.00
 
     # Veo billing is per second of generated video, not per token. None of
-    # these could be confirmed on the official Vertex pricing page as of
-    # 2026-07-02 -- figures are the best available estimate from secondary
-    # sources. Confirm in Cloud Billing before relying on them.
+    # these could be confirmed on the official Vertex pricing page or Cloud
+    # Billing (no access) -- figures are an LLM-sourced estimate. Confirm
+    # against Cloud Billing before relying on them for real budget decisions.
     veo-3.1-generate-preview:
       verified: false
       unit: per_second_video
@@ -86,12 +86,12 @@ pricing:
     veo-3.1-fast-generate-preview:
       verified: false
       unit: per_second_video
-      rate_standard: 0.11
+      rate_standard: 0.15
       rate_4k: 0.30
     veo-3.1-lite-generate-preview:
       verified: false
       unit: per_second_video
-      rate_standard: 0.065
+      rate_standard: 0.05
 
 capabilities:
 
