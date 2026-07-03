@@ -9,8 +9,11 @@ the source of truth for actual charges, not this module.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -52,6 +55,8 @@ def estimate_cost(
     usage: UsageInfo | None,
     pricing_table: dict[str, Any],
     output_images: int = 0,
+    duration_seconds: float = 0.0,
+    resolution: str | None = None,
     label: str = "",
 ) -> CostEstimate:
     models = (pricing_table or {}).get("models", {})
@@ -62,6 +67,7 @@ def estimate_cost(
     }
 
     if entry is None:
+        logger.warning("No pricing entry for model '%s' -- cost not estimated for this call", model)
         return CostEstimate(
             model=model,
             usd=0.0,
@@ -71,6 +77,16 @@ def estimate_cost(
         )
 
     verified = bool(entry.get("verified", False))
+    unit = entry.get("unit", "per_million_tokens")
+
+    if unit == "per_second_video":
+        return _estimate_video_cost(
+            model=model, entry=entry, duration_seconds=duration_seconds, resolution=resolution, verified=verified
+        )
+
+    if unit == "per_image":
+        return _estimate_flat_image_cost(model=model, entry=entry, output_images=output_images, verified=verified)
+
     notes: list[str] = []
     breakdown: dict[str, float] = {}
     input_usd = 0.0
@@ -80,7 +96,6 @@ def estimate_cost(
         notes.append("API response had no usage_metadata — cost not estimated.")
         return CostEstimate(model=model, usd=0.0, verified=verified, tokens=tokens, notes=notes)
 
-    unit = entry.get("unit", "per_million_tokens")
     if unit != "per_million_tokens":
         notes.append(f"Model billed as '{unit}', not supported by this calculator — check Cloud Billing.")
         return CostEstimate(model=model, usd=0.0, verified=False, tokens=tokens, notes=notes)
@@ -108,6 +123,7 @@ def estimate_cost(
         input_usd = usage.prompt_tokens / 1_000_000 * entry["input_text"]
         breakdown["input_text"] = input_usd
     else:
+        logger.warning("No input rate configured for model '%s'", model)
         notes.append("No input rate found for this model.")
 
     if output_images > 0 and "output_image" in entry:
@@ -124,6 +140,7 @@ def estimate_cost(
         output_usd = usage.output_tokens / 1_000_000 * entry["output"]
         breakdown["output"] = output_usd
     else:
+        logger.warning("No output rate configured for model '%s'", model)
         notes.append("No output rate found for this model.")
 
     if not verified:
@@ -137,6 +154,65 @@ def estimate_cost(
         output_usd=output_usd,
         breakdown=breakdown,
         tokens=tokens,
+        notes=notes,
+    )
+
+
+def _estimate_video_cost(
+    *,
+    model: str,
+    entry: dict[str, Any],
+    duration_seconds: float,
+    resolution: str | None,
+    verified: bool,
+) -> CostEstimate:
+    """Veo bills per second of generated video, not per token."""
+    notes: list[str] = []
+    if duration_seconds <= 0:
+        notes.append("No duration provided — cost not estimated.")
+        return CostEstimate(model=model, usd=0.0, verified=verified, notes=notes)
+
+    is_4k = (resolution or "").lower() in {"4k", "2160p"}
+    rate = entry.get("rate_4k") if is_4k else entry.get("rate_standard")
+    if rate is None:
+        notes.append(f"No rate configured for resolution '{resolution}'.")
+        return CostEstimate(model=model, usd=0.0, verified=verified, notes=notes)
+
+    output_usd = duration_seconds * rate
+    if not verified:
+        notes.append("Rate unverified against an official Google source — confirm in Cloud Billing.")
+
+    return CostEstimate(
+        model=model,
+        usd=output_usd,
+        verified=verified,
+        output_usd=output_usd,
+        breakdown={"output_video_seconds": output_usd},
+        tokens={"prompt": 0, "output": 0},
+        notes=notes,
+    )
+
+
+def _estimate_flat_image_cost(
+    *, model: str, entry: dict[str, Any], output_images: int, verified: bool
+) -> CostEstimate:
+    """Imagen bills a flat rate per image, not per token."""
+    notes: list[str] = []
+    rate = entry.get("rate_per_image")
+    if rate is None:
+        notes.append("No per-image rate configured for this model.")
+        return CostEstimate(model=model, usd=0.0, verified=verified, notes=notes)
+    count = max(output_images, 1)
+    output_usd = count * rate
+    if not verified:
+        notes.append("Rate unverified against an official Google source — confirm in Cloud Billing.")
+    return CostEstimate(
+        model=model,
+        usd=output_usd,
+        verified=verified,
+        output_usd=output_usd,
+        breakdown={"output_images": output_usd},
+        tokens={"prompt": 0, "output": 0},
         notes=notes,
     )
 
@@ -160,6 +236,8 @@ def summarize_costs(calls: list[dict[str, Any]], pricing_table: dict[str, Any]) 
             usage=call.get("usage"),
             pricing_table=pricing_table,
             output_images=call.get("output_images", 0),
+            duration_seconds=call.get("duration_seconds", 0.0),
+            resolution=call.get("resolution"),
             label=call.get("label", ""),
         )
         entries.append({"label": call.get("label", call["model"]), **est.as_dict()})
@@ -170,6 +248,11 @@ def summarize_costs(calls: list[dict[str, Any]], pricing_table: dict[str, Any]) 
         total_output_tokens += est.tokens.get("output", 0)
         if not est.verified:
             any_unverified = True
+
+    logger.debug(
+        "summarize_costs: %d call(s), total=$%.6f, unverified=%s",
+        len(calls), total, any_unverified,
+    )
 
     return {
         "total_usd": round(total, 6),

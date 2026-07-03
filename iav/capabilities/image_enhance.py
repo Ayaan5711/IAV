@@ -44,13 +44,15 @@ class ImageEnhance(Capability):
         image_bytes = source.read_bytes()
         mime_type = _guess_mime(source)
         instruction = (payload.instruction or "").strip() or self._settings["default_instruction"]
-        # Allow quick model swaps without editing config — handy while figuring
-        # out which image-gen model the Vertex project is allowlisted for.
-        model = os.environ.get("GEMINI_IMAGE_MODEL") or self._settings["model"]
+        params = payload.params or {}
+        model = params.get("model") or os.environ.get("GEMINI_IMAGE_MODEL") or self._settings["model"]
+        resolution = params.get("resolution") or self._settings.get("resolution")
+        output_format = params.get("output_format") or self._settings.get("output_format")
 
         logger.info(
-            "image_enhance: invoking model=%s on file=%s (%d bytes)",
+            "image_enhance: invoking model=%s resolution=%s on file=%s (%d bytes)",
             model,
+            resolution,
             source.name,
             len(image_bytes),
         )
@@ -61,6 +63,8 @@ class ImageEnhance(Capability):
                 image_bytes=image_bytes,
                 image_mime_type=mime_type,
                 instruction=instruction,
+                resolution=resolution,
+                output_mime_type=output_format,
             )
         except GeminiCallError as exc:
             raise ImageEnhanceError(f"Gemini call failed: {exc}") from exc

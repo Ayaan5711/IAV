@@ -44,16 +44,20 @@ pricing:
       output_text: 12.00
       output_image: 120.00
 
-    gemini-2.5-flash-image:    # Nano Banana (original) — not on the pricing
-      verified: false          # page separately; using the 3.1 rate as a stand-in
-      unit: per_million_tokens
-      input: 0.50
-      output_text: 3.00
+    gemini-2.5-flash-image:    # Nano Banana (original) — not on the official
+      verified: false          # pricing page; input/output_text below per an
+      unit: per_million_tokens # LLM-sourced estimate, output_image still a
+      input: 0.30              # placeholder (no confident figure given for it)
+      output_text: 2.50
       output_image: 60.00
 
-    imagen-3.0-capability-001:  # billed per-image, not per-token — unsupported
+    imagen-3.0-capability-001:  # billed per-image, not per-token
+      # Rate reported by an LLM query (not an official Google source or
+      # Cloud Billing), so still unverified -- but a real estimate is more
+      # honest than showing $0.00 for an unsupported unit.
       verified: false
       unit: per_image
+      rate_per_image: 0.040
 
     gemini-2.5-flash:
       verified: true
@@ -70,6 +74,25 @@ pricing:
       input_text: 0.50
       output_audio: 10.00
 
+    # Veo billing is per second of generated video, not per token. None of
+    # these could be confirmed on the official Vertex pricing page or Cloud
+    # Billing (no access) -- figures are an LLM-sourced estimate. Confirm
+    # against Cloud Billing before relying on them for real budget decisions.
+    veo-3.1-generate-preview:
+      verified: false
+      unit: per_second_video
+      rate_standard: 0.40
+      rate_4k: 0.60
+    veo-3.1-fast-generate-preview:
+      verified: false
+      unit: per_second_video
+      rate_standard: 0.15
+      rate_4k: 0.30
+    veo-3.1-lite-generate-preview:
+      verified: false
+      unit: per_second_video
+      rate_standard: 0.05
+
 capabilities:
 
   audio_question_generation:
@@ -85,8 +108,11 @@ capabilities:
     # the same question schema as video_to_questions. Output questions are
     # TEXT (read on screen), not narrated.
     text_model: gemini-2.5-flash
+    available_text_models: [gemini-2.5-flash, gemini-2.5-pro]
     tts_model: gemini-2.5-flash-preview-tts
+    available_tts_models: [gemini-2.5-flash-preview-tts, gemini-2.5-pro-preview-tts]
     voice_preset: Kore
+    available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
     sample_rate_hz: 24000
     default_question_count: 5
     default_question_type: mcq      # mcq | short_answer | conceptual
@@ -130,13 +156,11 @@ capabilities:
 
   image_enhance:
     # Nano Banana 2 — confirmed working on this Vertex AI project.
-    # Override at runtime with the GEMINI_IMAGE_MODEL env var if needed.
-    # Other models the project may have access to:
-    #   imagen-3.0-capability-001  # Imagen 3 edit
-    #   gemini-2.5-flash-image     # Nano Banana on Vertex
-    #   gemini-3-pro-image         # Nano Banana Pro (Stable, may require allowlist)
+    # available_models populates the UI's model dropdown; model is the default.
     model: gemini-3.1-flash-image
+    available_models: [gemini-3.1-flash-image, gemini-3-pro-image, gemini-2.5-flash-image, imagen-3.0-capability-001]
     resolution: "2K"
+    available_resolutions: ["1K", "2K", "4K"]
     default_instruction: |
       Re-render this hand-drawn diagram as a clean, professional illustration
       suitable for use in a printed question paper.
@@ -155,14 +179,12 @@ capabilities:
         original sketch.
 
   audio_text_to_speech:
-    # Gemini TTS path. Override at runtime with GEMINI_TTS_MODEL env var.
-    # Voice preset is a placeholder — needs sign-off from whoever owns the
-    # English curriculum before going to real users.
-    # Other models the project may have access to:
-    #   gemini-2.5-pro-preview-tts
-    #   gemini-2.5-flash-tts
+    # Gemini TTS path. Voice preset is a placeholder — needs sign-off from
+    # whoever owns the English curriculum before going to real users.
     model: gemini-2.5-flash-preview-tts
+    available_models: [gemini-2.5-flash-preview-tts, gemini-2.5-pro-preview-tts]
     voice_preset: Kore
+    available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
     output_format: wav
     sample_rate_hz: 24000
     default_instruction: |
@@ -174,10 +196,12 @@ capabilities:
   audio_to_audio:
     # Hybrid pipeline: ASR (audio in, text out) -> optional cleanup -> TTS.
     # Original speaker's voice is NOT preserved — output uses the voice preset.
-    # Override at runtime with GEMINI_ASR_MODEL / GEMINI_TTS_MODEL env vars.
     asr_model: gemini-2.5-flash
+    available_asr_models: [gemini-2.5-flash, gemini-2.5-pro]
     tts_model: gemini-2.5-flash-preview-tts
+    available_tts_models: [gemini-2.5-flash-preview-tts, gemini-2.5-pro-preview-tts]
     voice_preset: Kore
+    available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
     output_format: wav
     sample_rate_hz: 24000
     cleanup_transcript: true
@@ -196,11 +220,8 @@ capabilities:
 
   video_to_questions:
     # Video understanding -> structured question/answer JSON.
-    # Override at runtime with the GEMINI_VIDEO_MODEL env var.
-    # Other models the project may have access to:
-    #   gemini-2.5-pro          # higher quality, slower, more expensive
-    #   gemini-3.5-flash        # newer family, if allowlisted
     model: gemini-2.5-flash
+    available_models: [gemini-2.5-flash, gemini-2.5-pro, gemini-3.5-flash]
     default_question_count: 5
     default_question_type: mcq      # mcq | short_answer | conceptual
     default_level: undergraduate    # school | undergraduate | postgraduate
@@ -233,6 +254,7 @@ capabilities:
     # flagging. SME's original voice is preserved — we denoise it, we
     # don't regenerate it as TTS.
     analysis_model: gemini-2.5-flash
+    available_models: [gemini-2.5-flash, gemini-2.5-pro, gemini-3.5-flash]
     output_format: mp4
     pipeline:
       stabilize: true                # ffmpeg deshake filter
@@ -243,6 +265,7 @@ capabilities:
     encoder:
       video_codec: libx264
       preset: medium                 # ultrafast | superfast | veryfast | faster | fast | medium | slow
+      available_presets: [ultrafast, superfast, veryfast, faster, fast, medium, slow]
       crf: 22                        # lower = better quality, larger file
       audio_codec: aac
       audio_bitrate: 160k
@@ -266,3 +289,77 @@ capabilities:
       - Timestamps must be in MM:SS.mmm format with millisecond precision.
       - Segments must not overlap and must be in chronological order.
       - Transcribe verbatim — do not paraphrase, summarise, or omit content.
+
+  # ---------------------------------------------------------------------
+  # Generate-from-scratch capabilities. Unlike the enhance/analyse tabs
+  # above (which transform SME-supplied content), these take a structured
+  # prompt -- assessment metadata plus media-specific attributes -- and
+  # generate new media from nothing. See iav/capabilities/prompt_schema.py
+  # for the shared attribute fields and validation.
+  # ---------------------------------------------------------------------
+
+  image_generate:
+    model: gemini-3.1-flash-image
+    available_models: [gemini-3.1-flash-image, gemini-3-pro-image, gemini-2.5-flash-image]
+    resolution: "2K"
+    available_resolutions: ["1K", "2K", "4K"]
+    output_format: png
+    available_formats: [png, jpeg]
+    visual_types: [Diagram, Scenario, Chart]
+    styles: [Flat illustration, Realistic, Line art, Watercolor, 3D render, Infographic]
+    prompt_template: |
+      Generate a {visual_type}, in a {style} style, suitable for use in an
+      exam question.
+
+      {common_block}
+
+      {free_text}
+
+      Constraints:
+      - No watermarks, signatures, or overlaid text unless explicitly requested.
+      - Content must be factually accurate and age-appropriate for the target audience.
+
+  audio_generate:
+    model: gemini-2.5-flash-preview-tts
+    available_models: [gemini-2.5-flash-preview-tts, gemini-2.5-pro-preview-tts]
+    voice_preset: Kore
+    available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
+    sample_rate_hz: 24000
+    # Gemini TTS always returns raw PCM, wrapped as WAV. mp3 is a real
+    # conversion via ffmpeg (same dependency video_enhance already needs),
+    # not just a label -- if ffmpeg isn't on PATH, wav is returned instead
+    # and the result says so rather than silently mislabelling the file.
+    output_format: wav
+    available_formats: [wav, mp3]
+    speaker_modes: [Single speaker, Multiple speakers]
+    accents: [Neutral, US, UK, Indian, Australian]
+    speeds: [Slow, Normal, Fast]
+    tones: [Neutral, Formal, Friendly, Serious, Enthusiastic]
+    lengths: ["Short (~30s)", "Medium (~1-2 min)", "Long (~3-5 min)"]
+    prompt_template: |
+      Narrate the following content in a {tone} tone, at a {speed} pace, with
+      a {accent} accent. Target length: {length}.
+
+      {common_block}
+
+      Content:
+      {free_text}
+
+  video_generate:
+    model: veo-3.1-generate-preview
+    available_models: [veo-3.1-generate-preview, veo-3.1-fast-generate-preview, veo-3.1-lite-generate-preview]
+    resolution: "720p"
+    available_resolutions: ["720p", "1080p"]
+    output_format: mp4   # the only format Veo returns -- no conversion needed
+    duration_seconds: 8
+    available_durations_seconds: [4, 6, 8]
+    video_types: [Scenario Based, Demonstration, Explanatory walkthrough]
+    generate_audio: true
+    poll_interval_seconds: 10
+    poll_timeout_seconds: 360
+    prompt_template: |
+      A {video_type} video for an assessment question.
+
+      {common_block}
+
+      Scenario: {free_text}

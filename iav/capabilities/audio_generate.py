@@ -1,0 +1,180 @@
+"""Generate Audio — structured prompt → new narrated audio.
+
+Unlike audio_to_audio (which re-narrates an existing recording), this
+generates narration from nothing: assessment metadata + speaker/accent/
+speed/tone/length attributes, sent straight to Gemini TTS.
+"""
+
+from __future__ import annotations
+
+import io
+import logging
+import os
+import shutil
+import subprocess
+import tempfile
+import wave
+from pathlib import Path
+
+from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
+from iav.capabilities.prompt_schema import (
+    CommonAttributes,
+    common_block,
+    validate_common_attributes,
+    validate_free_text,
+)
+from iav.models.config import Config, load_config
+from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
+from iav.models.pricing import summarize_costs
+from iav.storage import save_output
+
+logger = logging.getLogger(__name__)
+
+_MULTI_SPEAKER_VOICES = ["Kore", "Puck"]
+
+
+class AudioGenerateError(RuntimeError):
+    """Raised when audio generation cannot produce an output."""
+
+
+class AudioGenerate(Capability):
+    name = "audio_generate"
+
+    def __init__(self, client: GeminiClient | None = None, config: Config | None = None):
+        self.config = config or load_config()
+        self.client = client or get_client(self.config)
+        self._settings = self.config.capability(self.name)
+
+    def process(self, payload: CapabilityInput) -> CapabilityOutput:
+        free_text = (payload.text or payload.instruction or "").strip()
+        params = payload.params or {}
+        common = CommonAttributes(
+            assessment_outcome=params.get("assessment_outcome", ""),
+            difficulty_level=params.get("difficulty_level", "medium"),
+            target_audience=params.get("target_audience", "undergraduate"),
+            question_type=params.get("question_type", "mcq"),
+        )
+        accent = params.get("accent") or self._settings["accents"][0]
+        speed = params.get("speed") or self._settings["speeds"][0]
+        tone = params.get("tone") or self._settings["tones"][0]
+        length = params.get("length") or self._settings["lengths"][0]
+        multi_speaker = bool(params.get("multi_speaker", False))
+        voice = params.get("voice") or self._settings.get("voice_preset", "Kore")
+
+        errors = validate_common_attributes(common) + validate_free_text(free_text)
+        if errors:
+            raise ValueError("; ".join(errors))
+
+        model = os.environ.get("GEMINI_TTS_MODEL") or params.get("model") or self._settings["model"]
+        sample_rate = int(self._settings.get("sample_rate_hz", 24000))
+
+        prompt = self._settings["prompt_template"].format(
+            tone=tone, speed=speed, accent=accent, length=length,
+            common_block=common_block(common), free_text=free_text,
+        )
+
+        speakers = None
+        if multi_speaker:
+            speakers = [
+                {"speaker": "Speaker1", "voice": _MULTI_SPEAKER_VOICES[0]},
+                {"speaker": "Speaker2", "voice": _MULTI_SPEAKER_VOICES[1]},
+            ]
+            prompt += (
+                "\n\nRender this as a two-speaker dialogue. Label each line "
+                "'Speaker1:' or 'Speaker2:' before narrating it."
+            )
+
+        logger.info(
+            "audio_generate: model=%s multi_speaker=%s accent=%s speed=%s tone=%s",
+            model, multi_speaker, accent, speed, tone,
+        )
+
+        try:
+            result = self.client.synthesize_speech(
+                model=model,
+                script=prompt,
+                voice_preset=None if speakers else voice,
+                speakers=speakers,
+            )
+        except GeminiCallError as exc:
+            raise AudioGenerateError(f"Gemini TTS call failed: {exc}") from exc
+
+        if not result.audio_bytes:
+            note = (result.text or "").strip() or "(no detail)"
+            raise AudioGenerateError(f"Model returned no audio. Model said: {note}")
+
+        wav_bytes = _wrap_pcm_as_wav(result.audio_bytes, sample_rate=sample_rate)
+
+        requested_format = (params.get("output_format") or self._settings.get("output_format", "wav")).lower()
+        output_bytes, actual_format, format_note = _maybe_convert_to_mp3(wav_bytes, requested_format)
+
+        output_path = save_output(data=output_bytes, suffix=f".{actual_format}", capability=self.name)
+        cost = summarize_costs(
+            [{"label": "audio_generate", "model": model, "usage": result.usage}],
+            self.config.pricing,
+        )
+
+        logger.info(
+            "audio_generate: wrote %s (%s), est. cost $%.6f", output_path, actual_format, cost["total_usd"]
+        )
+
+        return CapabilityOutput(
+            file_path=output_path,
+            text=prompt,
+            metadata={
+                "model": model,
+                "multi_speaker": multi_speaker,
+                "accent": accent,
+                "speed": speed,
+                "tone": tone,
+                "length": length,
+                "output_bytes": len(output_bytes),
+                "mime_type": "audio/mpeg" if actual_format == "mp3" else "audio/wav",
+                "format_note": format_note,
+                "cost": cost,
+            },
+        )
+
+
+def _wrap_pcm_as_wav(
+    pcm_bytes: bytes,
+    *,
+    sample_rate: int = 24000,
+    channels: int = 1,
+    sample_width: int = 2,
+) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wav:
+        wav.setnchannels(channels)
+        wav.setsampwidth(sample_width)
+        wav.setframerate(sample_rate)
+        wav.writeframes(pcm_bytes)
+    return buf.getvalue()
+
+
+def _maybe_convert_to_mp3(wav_bytes: bytes, requested_format: str) -> tuple[bytes, str, str | None]:
+    """Converts WAV -> MP3 via ffmpeg if requested and available.
+
+    Returns (bytes, actual_format, note). Falls back to WAV with a note
+    rather than silently mislabelling the file if ffmpeg isn't on PATH.
+    """
+    if requested_format != "mp3":
+        return wav_bytes, "wav", None
+
+    if not shutil.which("ffmpeg"):
+        return wav_bytes, "wav", "mp3 requested but ffmpeg is not on PATH; returned wav instead."
+
+    with tempfile.TemporaryDirectory(prefix="iav-audio-") as tmp:
+        in_path = Path(tmp) / "in.wav"
+        out_path = Path(tmp) / "out.mp3"
+        in_path.write_bytes(wav_bytes)
+        proc = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(in_path), "-codec:a", "libmp3lame", "-qscale:a", "2", str(out_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if proc.returncode != 0 or not out_path.exists():
+            stderr_tail = (proc.stderr or b"").decode("utf-8", errors="replace")[-500:]
+            return wav_bytes, "wav", f"mp3 conversion failed, returned wav instead: {stderr_tail}"
+        return out_path.read_bytes(), "mp3", None

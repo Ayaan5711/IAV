@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -17,6 +18,7 @@ from typing import Any, Iterable
 from google import genai
 from google.genai import types as genai_types
 from tenacity import (
+    before_sleep_log,
     retry,
     retry_if_exception_type,
     stop_after_attempt,
@@ -40,6 +42,8 @@ class GenerationResult:
     image_mime_type: str | None = None
     audio_bytes: bytes | None = None
     audio_mime_type: str | None = None
+    video_bytes: bytes | None = None
+    video_mime_type: str | None = None
     usage: UsageInfo | None = None
     raw: Any = None
 
@@ -99,6 +103,7 @@ class GeminiClient:
                 max=retry_cfg.max_wait_seconds,
             ),
             retry=retry_if_exception_type(Exception),
+            before_sleep=before_sleep_log(logger, logging.WARNING),
         )
         def _call() -> Any:
             return self._client.models.generate_content(
@@ -124,6 +129,8 @@ class GeminiClient:
         image_bytes: bytes,
         image_mime_type: str,
         instruction: str,
+        resolution: str | None = None,
+        output_mime_type: str | None = None,
     ) -> GenerationResult:
         """Run a single image-edit call (e.g. Nano Banana Pro)."""
         contents = [
@@ -135,6 +142,26 @@ class GeminiClient:
             contents=contents,
             config=genai_types.GenerateContentConfig(
                 response_modalities=["IMAGE", "TEXT"],
+                image_config=_image_config(resolution, output_mime_type),
+            ),
+        )
+        return _extract(response)
+
+    def generate_image(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        resolution: str | None = None,
+        output_mime_type: str | None = None,
+    ) -> GenerationResult:
+        """Pure text-to-image generation -- no input image, unlike edit_image()."""
+        response = self._generate(
+            model=model,
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                response_modalities=["IMAGE", "TEXT"],
+                image_config=_image_config(resolution, output_mime_type),
             ),
         )
         return _extract(response)
@@ -174,20 +201,46 @@ class GeminiClient:
         *,
         model: str,
         script: str,
-        voice_preset: str,
+        voice_preset: str | None = None,
+        speakers: list[dict[str, str]] | None = None,
         instruction: str | None = None,
     ) -> GenerationResult:
-        """Single TTS call. Caller is responsible for chunking long scripts."""
+        """Single TTS call. Caller is responsible for chunking long scripts.
+
+        Pass ``speakers`` (a list of {"speaker": name, "voice": voice_name})
+        for multi-speaker narration instead of ``voice_preset`` -- the script
+        text must use the same speaker names Gemini sees here.
+        """
         prompt = script if not instruction else f"{instruction.strip()}\n\n{script}"
-        config = genai_types.GenerateContentConfig(
-            response_modalities=["AUDIO"],
-            speech_config=genai_types.SpeechConfig(
+
+        if speakers:
+            speech_config = genai_types.SpeechConfig(
+                multi_speaker_voice_config=genai_types.MultiSpeakerVoiceConfig(
+                    speaker_voice_configs=[
+                        genai_types.SpeakerVoiceConfig(
+                            speaker=s["speaker"],
+                            voice_config=genai_types.VoiceConfig(
+                                prebuilt_voice_config=genai_types.PrebuiltVoiceConfig(
+                                    voice_name=s["voice"],
+                                )
+                            ),
+                        )
+                        for s in speakers
+                    ],
+                ),
+            )
+        else:
+            speech_config = genai_types.SpeechConfig(
                 voice_config=genai_types.VoiceConfig(
                     prebuilt_voice_config=genai_types.PrebuiltVoiceConfig(
-                        voice_name=voice_preset,
+                        voice_name=voice_preset or "Kore",
                     )
                 )
-            ),
+            )
+
+        config = genai_types.GenerateContentConfig(
+            response_modalities=["AUDIO"],
+            speech_config=speech_config,
         )
         response = self._generate(model=model, contents=prompt, config=config)
         return _extract(response)
@@ -210,6 +263,95 @@ class GeminiClient:
             cfg = genai_types.GenerateContentConfig(response_mime_type=response_mime_type)
         response = self._generate(model=model, contents=contents, config=cfg)
         return _extract(response)
+
+    def generate_video(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        duration_seconds: int = 8,
+        aspect_ratio: str = "16:9",
+        resolution: str = "720p",
+        generate_audio: bool = True,
+        poll_interval_seconds: float = 10.0,
+        poll_timeout_seconds: float = 360.0,
+    ) -> GenerationResult:
+        """Text-to-video via Veo. Long-running: submits a job, polls until done.
+
+        Veo operations don't return usage_metadata the way generate_content
+        does -- billing is per second of generated video, not per token, so
+        the returned result carries no usage info. Cost is computed
+        separately from duration_seconds.
+        """
+        config = genai_types.GenerateVideosConfig(
+            duration_seconds=duration_seconds,
+            aspect_ratio=aspect_ratio,
+            resolution=resolution,
+            generate_audio=generate_audio,
+        )
+        logger.info(
+            "generate_video: submitting model=%s duration=%ds resolution=%s",
+            model, duration_seconds, resolution,
+        )
+        try:
+            operation = self._client.models.generate_videos(model=model, prompt=prompt, config=config)
+        except Exception as exc:
+            logger.exception("generate_video: submission failed (model=%s)", model)
+            raise GeminiCallError(str(exc)) from exc
+
+        elapsed = 0.0
+        while not operation.done:
+            if elapsed >= poll_timeout_seconds:
+                logger.error(
+                    "generate_video: timed out after %.0fs waiting on operation %s",
+                    elapsed, operation.name,
+                )
+                raise GeminiCallError(
+                    f"Video generation did not finish within {poll_timeout_seconds:.0f}s "
+                    "(it may still complete server-side; Veo latency can run up to several minutes)."
+                )
+            time.sleep(poll_interval_seconds)
+            elapsed += poll_interval_seconds
+            logger.debug("generate_video: polling operation %s (%.0fs elapsed)", operation.name, elapsed)
+            try:
+                operation = self._client.operations.get(operation)
+            except Exception as exc:
+                logger.exception("generate_video: polling failed after %.0fs", elapsed)
+                raise GeminiCallError(str(exc)) from exc
+
+        if operation.error:
+            logger.error("generate_video: operation returned an error: %s", operation.error)
+            raise GeminiCallError(f"Video generation failed: {operation.error}")
+
+        result = operation.result or operation.response
+        generated = (result.generated_videos or [None])[0] if result else None
+        if generated is None or generated.video is None:
+            logger.error("generate_video: operation completed with no video in the response")
+            raise GeminiCallError("Video generation completed but returned no video.")
+
+        video = generated.video
+        video_bytes = video.video_bytes
+        if not video_bytes and video.uri:
+            logger.debug("generate_video: downloading video bytes from %s", video.uri)
+            video_bytes = self._client.files.download(file=generated)
+
+        logger.info(
+            "generate_video: completed in %.0fs, %d bytes", elapsed, len(video_bytes or b"")
+        )
+
+        gen_result = GenerationResult(raw=operation)
+        gen_result.video_bytes = video_bytes
+        gen_result.video_mime_type = video.mime_type or "video/mp4"
+        return gen_result
+
+
+def _image_config(resolution: str | None, output_mime_type: str | None) -> genai_types.ImageConfig | None:
+    if not resolution and not output_mime_type:
+        return None
+    mime = None
+    if output_mime_type:
+        mime = output_mime_type if "/" in output_mime_type else f"image/{output_mime_type}"
+    return genai_types.ImageConfig(image_size=resolution, output_mime_type=mime)
 
 
 def _extract(response: Any) -> GenerationResult:

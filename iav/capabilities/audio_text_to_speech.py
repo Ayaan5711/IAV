@@ -38,9 +38,10 @@ class TextToSpeech(Capability):
         if not script:
             raise ValueError("TextToSpeech requires text input (the script).")
 
+        params = payload.params or {}
         instruction = (payload.instruction or "").strip() or self._settings.get("default_instruction", "")
-        model = os.environ.get("GEMINI_TTS_MODEL") or self._settings["model"]
-        voice = self._settings.get("voice_preset", "Kore")
+        model = params.get("model") or os.environ.get("GEMINI_TTS_MODEL") or self._settings["model"]
+        voice = params.get("voice") or self._settings.get("voice_preset", "Kore")
         sample_rate = int(self._settings.get("sample_rate_hz", 24000))
 
         logger.info(

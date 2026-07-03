@@ -1,8 +1,14 @@
 """Streamlit shell for the IAV media enhancement POC.
 
-One tab per capability, all sharing the same upload → instruction → process →
-result UX. Each tab delegates to a Capability implementation under
-``iav.capabilities`` — the UI never references Gemini model IDs directly.
+Two sections, each its own row of tabs:
+
+  - Transform Existing Content: enhance/analyse SME-supplied material
+  - Generate New Content: create new media from a structured, validated prompt
+
+Every tab follows the same shape: say what you want → (optional) tune
+advanced options, tucked into a collapsed expander → Process → result + cost.
+The UI never references a Gemini model ID directly except as a value pulled
+from config.yaml's available_* lists.
 """
 
 from __future__ import annotations
@@ -10,16 +16,20 @@ from __future__ import annotations
 import logging
 import traceback
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import streamlit as st
 
 from iav.capabilities import CapabilityInput
+from iav.capabilities.audio_generate import AudioGenerate
 from iav.capabilities.audio_question_generation import AudioQuestionGeneration
 from iav.capabilities.audio_text_to_speech import TextToSpeech
 from iav.capabilities.audio_to_audio import AudioToAudio
 from iav.capabilities.image_enhance import ImageEnhance
+from iav.capabilities.image_generate import ImageGenerate
+from iav.capabilities.prompt_schema import CommonAttributes, validate_common_attributes, validate_free_text
 from iav.capabilities.video_enhance import VideoEnhance
+from iav.capabilities.video_generate import VideoGenerate
 from iav.capabilities.video_to_questions import VideoToQuestions
 from iav.models.config import load_config
 from iav.storage import save_input
@@ -42,6 +52,15 @@ st.set_page_config(
 # ----------------------------------------------------------------------
 
 
+def _idx(options: list | None, value: Any) -> int:
+    if not options:
+        return 0
+    try:
+        return options.index(value)
+    except ValueError:
+        return 0
+
+
 def _show_config_status() -> bool:
     """Render auth/config status in the sidebar. Returns True if ready."""
     with st.sidebar:
@@ -49,6 +68,7 @@ def _show_config_status() -> bool:
         try:
             cfg = load_config()
         except Exception as exc:  # noqa: BLE001 — we want to surface any config error
+            logger.exception("Config failed to load")
             st.error(f"Config error: {exc}")
             return False
 
@@ -60,6 +80,7 @@ def _show_config_status() -> bool:
 
 def _show_session_cost() -> None:
     with st.sidebar:
+        st.divider()
         st.markdown("### Session cost (estimated)")
         total = st.session_state.get("session_cost_usd", 0.0)
         st.metric("Total this session", f"${total:.6f}")
@@ -113,13 +134,16 @@ def _capability_tab(
     description: str,
     accept_types: list[str] | None,
     default_instruction: str,
-    run: Callable[[Path, str], object],
+    run: Callable[[Any, str, dict], object],
     output_renderer: Callable[[object], None],
+    options_renderer: Callable[[], dict] | None = None,
+    options_label: str = "Advanced options",
 ) -> None:
-    """Generic tab: upload + instruction + process + result.
+    """Generic tab: input → instruction → advanced options → process → result.
 
-    Keeps every capability visually identical and reduces per-tab code to
-    just the file types it accepts and how it renders its output.
+    Technical dials (model, voice, resolution, pipeline toggles) live inside
+    a collapsed expander so the default view is just "say what you want and
+    go" — the same shape for every tab, options tucked away until wanted.
     """
     st.subheader(title)
     st.caption(description)
@@ -144,9 +168,15 @@ def _capability_tab(
         "Instruction (optional — leave blank to use the default)",
         value="",
         placeholder=default_instruction,
-        height=120,
+        height=100,
         key=f"instruction-{title}",
     )
+
+    if options_renderer:
+        with st.expander(options_label, expanded=False):
+            params = options_renderer()
+    else:
+        params = {}
 
     if st.button("Process", type="primary", key=f"go-{title}"):
         if accept_types is not None and uploaded is None:
@@ -156,31 +186,76 @@ def _capability_tab(
             st.warning("Enter some text first.")
             return
 
+        logger.info("Tab '%s': Process clicked", title)
         try:
             with st.spinner("Working…"):
                 if accept_types is not None:
                     suffix = Path(uploaded.name).suffix or ""
                     saved = save_input(uploaded.getvalue(), suffix)
-                    result = run(saved, instruction)
+                    result = run(saved, instruction, params)
                 else:
-                    result = run(text_input, instruction)
+                    result = run(text_input, instruction, params)
             output_renderer(result)
         except NotImplementedError as exc:
+            logger.warning("Tab '%s': not yet implemented: %s", title, exc)
             st.info(f"Not yet implemented: {exc}")
         except Exception as exc:  # noqa: BLE001
+            logger.exception("Tab '%s': Process failed", title)
             st.error(f"Failed: {exc}")
             with st.expander("Traceback"):
                 st.code(traceback.format_exc())
 
 
+def _common_attributes_form(key_prefix: str) -> CommonAttributes:
+    """The four assessment-metadata fields shared by every generate tab."""
+    outcome = st.text_input(
+        "Assessment outcome",
+        placeholder="e.g. Apply the Pythagorean theorem to find a missing side",
+        key=f"{key_prefix}-outcome",
+    )
+    cols = st.columns(3)
+    difficulty = cols[0].selectbox("Difficulty level", ["easy", "medium", "hard"], index=1, key=f"{key_prefix}-diff")
+    audience = cols[1].selectbox(
+        "Target audience", ["school", "undergraduate", "postgraduate"], index=1, key=f"{key_prefix}-aud"
+    )
+    qtype = cols[2].selectbox(
+        "Question type", ["mcq", "short_answer", "conceptual"], key=f"{key_prefix}-qtype"
+    )
+    return CommonAttributes(
+        assessment_outcome=outcome,
+        difficulty_level=difficulty,
+        target_audience=audience,
+        question_type=qtype,
+    )
+
+
+def _show_validation_errors(errors: list[str]) -> bool:
+    """Renders validation errors. Returns True if there were none (i.e. valid)."""
+    for err in errors:
+        st.error(err)
+    return not errors
+
+
 # ----------------------------------------------------------------------
-# Per-capability runners
+# Transform Existing Content — enhance/analyse SME-supplied material
 # ----------------------------------------------------------------------
 
 
-def _run_image(saved: Path, instruction: str):
+def _image_enhance_options() -> dict:
+    s = load_config().capability("image_enhance")
+    cols = st.columns(2)
+    models = s.get("available_models") or [s["model"]]
+    model = cols[0].selectbox("Model", models, index=_idx(models, s["model"]), key="ie-model")
+    resolutions = s.get("available_resolutions") or [s.get("resolution", "2K")]
+    resolution = cols[1].selectbox(
+        "Resolution", resolutions, index=_idx(resolutions, s.get("resolution")), key="ie-res"
+    )
+    return {"model": model, "resolution": resolution}
+
+
+def _run_image(saved: Path, instruction: str, params: dict):
     cap = ImageEnhance()
-    return cap.process(CapabilityInput(file_path=saved, instruction=instruction))
+    return cap.process(CapabilityInput(file_path=saved, instruction=instruction, params=params))
 
 
 def _render_image_output(result) -> None:  # type: ignore[no-untyped-def]
@@ -197,24 +272,36 @@ def _render_image_output(result) -> None:  # type: ignore[no-untyped-def]
     _render_cost(result.metadata)
 
 
-def _run_text_to_speech(text: str, instruction: str):
+def _tts_options() -> dict:
+    s = load_config().capability("audio_text_to_speech")
+    cols = st.columns(2)
+    models = s.get("available_models") or [s["model"]]
+    model = cols[0].selectbox("Model", models, index=_idx(models, s["model"]), key="tts-model")
+    voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
+    voice = cols[1].selectbox("Voice", voices, index=_idx(voices, s.get("voice_preset")), key="tts-voice")
+    return {"model": model, "voice": voice}
+
+
+def _run_text_to_speech(text: str, instruction: str, params: dict):
     cap = TextToSpeech()
-    return cap.process(CapabilityInput(text=text, instruction=instruction))
+    return cap.process(CapabilityInput(text=text, instruction=instruction, params=params))
 
 
-def _run_audio_to_audio(saved: Path, instruction: str):
+def _audio_to_audio_options() -> dict:
+    s = load_config().capability("audio_to_audio")
+    cols = st.columns(3)
+    asr_models = s.get("available_asr_models") or [s["asr_model"]]
+    asr_model = cols[0].selectbox("ASR model", asr_models, index=_idx(asr_models, s["asr_model"]), key="a2a-asr")
+    tts_models = s.get("available_tts_models") or [s["tts_model"]]
+    tts_model = cols[1].selectbox("TTS model", tts_models, index=_idx(tts_models, s["tts_model"]), key="a2a-tts")
+    voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
+    voice = cols[2].selectbox("Voice", voices, index=_idx(voices, s.get("voice_preset")), key="a2a-voice")
+    return {"asr_model": asr_model, "tts_model": tts_model, "voice": voice}
+
+
+def _run_audio_to_audio(saved: Path, instruction: str, params: dict):
     cap = AudioToAudio()
-    return cap.process(CapabilityInput(file_path=saved, instruction=instruction))
-
-
-def _run_video_questions(saved: Path, instruction: str):
-    cap = VideoToQuestions()
-    return cap.process(CapabilityInput(file_path=saved, instruction=instruction))
-
-
-def _run_video_enhance(saved: Path, instruction: str):
-    cap = VideoEnhance()
-    return cap.process(CapabilityInput(file_path=saved, instruction=instruction))
+    return cap.process(CapabilityInput(file_path=saved, instruction=instruction, params=params))
 
 
 def _render_audio_output(result) -> None:  # type: ignore[no-untyped-def]
@@ -238,6 +325,30 @@ def _render_audio_output(result) -> None:  # type: ignore[no-untyped-def]
     _render_cost(result.metadata)
 
 
+def _video_questions_options() -> dict:
+    s = load_config().capability("video_to_questions")
+    models = s.get("available_models") or [s["model"]]
+    model = st.selectbox("Model", models, index=_idx(models, s["model"]), key="vq-model")
+    cols = st.columns(3)
+    count = cols[0].number_input(
+        "Number of questions", min_value=1, max_value=20, value=int(s.get("default_question_count", 5)), key="vq-count"
+    )
+    qtype = cols[1].selectbox(
+        "Question type", ["mcq", "short_answer", "conceptual"],
+        index=_idx(["mcq", "short_answer", "conceptual"], s.get("default_question_type")), key="vq-type",
+    )
+    level = cols[2].selectbox(
+        "Level", ["school", "undergraduate", "postgraduate"],
+        index=_idx(["school", "undergraduate", "postgraduate"], s.get("default_level")), key="vq-level",
+    )
+    return {"model": model, "count": int(count), "type": qtype, "level": level}
+
+
+def _run_video_questions(saved: Path, instruction: str, params: dict):
+    cap = VideoToQuestions()
+    return cap.process(CapabilityInput(file_path=saved, instruction=instruction, params=params))
+
+
 def _render_questions_output(result) -> None:  # type: ignore[no-untyped-def]
     meta = result.metadata or {}
     st.success(f"Done — generated {meta.get('question_count', '?')} questions.")
@@ -255,6 +366,44 @@ def _render_questions_output(result) -> None:  # type: ignore[no-untyped-def]
                 mime="application/json",
             )
     _render_cost(result.metadata)
+
+
+def _video_enhance_options() -> dict:
+    s = load_config().capability("video_enhance")
+    models = s.get("available_models") or [s["analysis_model"]]
+    model = st.selectbox("Analysis model", models, index=_idx(models, s["analysis_model"]), key="ve-model")
+
+    st.caption("Pipeline steps")
+    pipeline_defaults = s.get("pipeline", {})
+    cols = st.columns(5)
+    stabilize = cols[0].checkbox("Stabilise", value=pipeline_defaults.get("stabilize", True), key="ve-stab")
+    color = cols[1].checkbox("Colour correct", value=pipeline_defaults.get("light_color_correction", True), key="ve-color")
+    denoise = cols[2].checkbox("Denoise audio", value=pipeline_defaults.get("audio_denoise", True), key="ve-denoise")
+    captions = cols[3].checkbox("Auto captions", value=pipeline_defaults.get("auto_captions", True), key="ve-cap")
+    flag_issues = cols[4].checkbox("Flag issues", value=pipeline_defaults.get("flag_issues", False), key="ve-flag")
+
+    encoder_defaults = s.get("encoder", {})
+    presets = encoder_defaults.get("available_presets") or [encoder_defaults.get("preset", "medium")]
+    preset = st.selectbox(
+        "Encoder preset (speed vs. quality)", presets, index=_idx(presets, encoder_defaults.get("preset")), key="ve-preset"
+    )
+
+    return {
+        "model": model,
+        "pipeline": {
+            "stabilize": stabilize,
+            "light_color_correction": color,
+            "audio_denoise": denoise,
+            "auto_captions": captions,
+            "flag_issues": flag_issues,
+        },
+        "encoder": {"preset": preset},
+    }
+
+
+def _run_video_enhance(saved: Path, instruction: str, params: dict):
+    cap = VideoEnhance()
+    return cap.process(CapabilityInput(file_path=saved, instruction=instruction, params=params))
 
 
 def _render_video_output(result) -> None:  # type: ignore[no-untyped-def]
@@ -282,17 +431,14 @@ def _render_video_output(result) -> None:  # type: ignore[no-untyped-def]
 
 
 def _audio_questions_tab() -> None:
-    """Topic/passage -> narrated audio + text comprehension questions.
-
-    Bespoke rather than routed through _capability_tab: this capability
-    needs a mode selector (topic vs. pasted passage) plus explicit
-    count/type/level controls, which the other tabs don't expose.
-    """
-    st.subheader("Audio → Questions — topic or passage → narrated audio + questions")
+    """Topic/passage -> narrated audio + text comprehension questions."""
+    st.subheader("Audio → Questions")
     st.caption(
         "Give a topic and Gemini writes a passage, or paste your own passage/script. "
         "Either way: narrated audio plus text comprehension questions with an answer key."
     )
+
+    s = load_config().capability("audio_question_generation")
 
     mode_label = st.radio(
         "Input type",
@@ -306,31 +452,34 @@ def _audio_questions_tab() -> None:
         "Topic" if mode == "topic" else "Passage / script",
         height=140,
         placeholder=(
-            "e.g. Photosynthesis"
-            if mode == "topic"
-            else "Paste the full passage or script text here…"
+            "e.g. Photosynthesis" if mode == "topic" else "Paste the full passage or script text here…"
         ),
         key="aq-text",
     )
 
-    col1, col2, col3 = st.columns(3)
-    count = col1.number_input("Number of questions", min_value=1, max_value=20, value=5, key="aq-count")
-    qtype = col2.selectbox("Question type", ["mcq", "short_answer", "conceptual"], key="aq-type")
-    level = col3.selectbox(
-        "Level", ["school", "undergraduate", "postgraduate"], index=1, key="aq-level"
-    )
+    cols = st.columns(3)
+    count = cols[0].number_input("Number of questions", min_value=1, max_value=20, value=5, key="aq-count")
+    qtype = cols[1].selectbox("Question type", ["mcq", "short_answer", "conceptual"], key="aq-type")
+    level = cols[2].selectbox("Level", ["school", "undergraduate", "postgraduate"], index=1, key="aq-level")
 
-    instruction = st.text_area(
-        "Narration instruction (optional — leave blank to use the default)",
-        value="",
-        height=80,
-        key="aq-instruction",
-    )
+    with st.expander("Advanced options", expanded=False):
+        cols2 = st.columns(2)
+        text_models = s.get("available_text_models") or [s["text_model"]]
+        text_model = cols2[0].selectbox("Text model", text_models, index=_idx(text_models, s["text_model"]), key="aq-textmodel")
+        voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
+        voice = cols2[1].selectbox("Voice", voices, index=_idx(voices, s.get("voice_preset")), key="aq-voice")
+        instruction = st.text_area(
+            "Narration instruction (optional — leave blank to use the default)",
+            value="",
+            height=80,
+            key="aq-instruction",
+        )
 
     if st.button("Process", type="primary", key="aq-go"):
         if not (text_input or "").strip():
             st.warning("Enter a topic or a passage first.")
             return
+        logger.info("Audio -> Questions: Process clicked (mode=%s)", mode)
         try:
             with st.spinner("Working…"):
                 cap = AudioQuestionGeneration()
@@ -343,13 +492,17 @@ def _audio_questions_tab() -> None:
                             "count": int(count),
                             "type": qtype,
                             "level": level,
+                            "text_model": text_model,
+                            "voice": voice,
                         },
                     )
                 )
             _render_audio_questions_output(result)
         except NotImplementedError as exc:
+            logger.warning("Audio -> Questions: not yet implemented: %s", exc)
             st.info(f"Not yet implemented: {exc}")
         except Exception as exc:  # noqa: BLE001
+            logger.exception("Audio -> Questions: Process failed")
             st.error(f"Failed: {exc}")
             with st.expander("Traceback"):
                 st.code(traceback.format_exc())
@@ -379,6 +532,239 @@ def _render_audio_questions_output(result) -> None:  # type: ignore[no-untyped-d
 
 
 # ----------------------------------------------------------------------
+# Generate New Content — new media from a structured, validated prompt
+# ----------------------------------------------------------------------
+
+
+def _generate_image_tab() -> None:
+    st.subheader("Generate Image")
+    st.caption("No sketch needed — describe what's wanted and Gemini generates it from scratch.")
+
+    s = load_config().capability("image_generate")
+    common = _common_attributes_form("gi")
+
+    cols = st.columns(2)
+    visual_type = cols[0].selectbox("Visual type", s["visual_types"], key="gi-visual")
+    style = cols[1].selectbox("Style", s["styles"], key="gi-style")
+
+    free_text = st.text_area(
+        "Describe the image",
+        height=110,
+        placeholder="e.g. A right triangle with legs 3 and 4, hypotenuse labelled c",
+        key="gi-freetext",
+    )
+
+    with st.expander("Advanced options", expanded=False):
+        cols2 = st.columns(3)
+        models = s.get("available_models") or [s["model"]]
+        model = cols2[0].selectbox("Model", models, index=_idx(models, s["model"]), key="gi-model")
+        resolutions = s.get("available_resolutions") or [s.get("resolution", "2K")]
+        resolution = cols2[1].selectbox("Resolution", resolutions, index=_idx(resolutions, s.get("resolution")), key="gi-res")
+        formats = s.get("available_formats") or [s.get("output_format", "png")]
+        output_format = cols2[2].selectbox("Format (for CAE compatibility)", formats, index=_idx(formats, s.get("output_format")), key="gi-fmt")
+
+    if st.button("Generate", type="primary", key="gi-go"):
+        errors = validate_common_attributes(common) + validate_free_text(free_text)
+        if not _show_validation_errors(errors):
+            return
+        logger.info("Generate Image: clicked (visual_type=%s, style=%s)", visual_type, style)
+        try:
+            with st.spinner("Generating…"):
+                cap = ImageGenerate()
+                result = cap.process(
+                    CapabilityInput(
+                        text=free_text,
+                        params={
+                            "assessment_outcome": common.assessment_outcome,
+                            "difficulty_level": common.difficulty_level,
+                            "target_audience": common.target_audience,
+                            "question_type": common.question_type,
+                            "visual_type": visual_type,
+                            "style": style,
+                            "model": model,
+                            "resolution": resolution,
+                            "output_format": output_format,
+                        },
+                    )
+                )
+            st.success("Done.")
+            st.image(str(result.file_path), caption=result.file_path.name)
+            with result.file_path.open("rb") as fh:
+                st.download_button(
+                    "Download", data=fh.read(), file_name=result.file_path.name,
+                    mime=result.metadata.get("mime_type", "image/png"),
+                )
+            with st.expander("Prompt sent to Gemini"):
+                st.text(result.metadata.get("prompt", ""))
+            _render_cost(result.metadata)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Generate Image: failed")
+            st.error(f"Failed: {exc}")
+            with st.expander("Traceback"):
+                st.code(traceback.format_exc())
+
+
+def _generate_audio_tab() -> None:
+    st.subheader("Generate Audio")
+    st.caption("No recording needed — describe the content and delivery, Gemini narrates it from scratch.")
+
+    s = load_config().capability("audio_generate")
+    common = _common_attributes_form("ga")
+
+    cols = st.columns(2)
+    speaker_mode = cols[0].selectbox("Speakers", s["speaker_modes"], key="ga-speakers")
+    multi_speaker = speaker_mode == "Multiple speakers"
+    accent = cols[1].selectbox("Accent", s["accents"], key="ga-accent")
+
+    cols2 = st.columns(2)
+    speed = cols2[0].selectbox("Speed", s["speeds"], key="ga-speed")
+    tone = cols2[1].selectbox("Tone", s["tones"], key="ga-tone")
+
+    length = st.selectbox("Length", s["lengths"], key="ga-length")
+
+    free_text = st.text_area(
+        "Content to narrate",
+        height=130,
+        placeholder="e.g. Explain the water cycle in three stages: evaporation, condensation, precipitation.",
+        key="ga-freetext",
+    )
+
+    with st.expander("Advanced options", expanded=False):
+        cols3 = st.columns(3)
+        models = s.get("available_models") or [s["model"]]
+        model = cols3[0].selectbox("Model", models, index=_idx(models, s["model"]), key="ga-model")
+        voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
+        voice = cols3[1].selectbox(
+            "Voice (single-speaker only)", voices, index=_idx(voices, s.get("voice_preset")),
+            key="ga-voice", disabled=multi_speaker,
+        )
+        formats = s.get("available_formats") or [s.get("output_format", "wav")]
+        output_format = cols3[2].selectbox(
+            "Format (for CAE compatibility)", formats, index=_idx(formats, s.get("output_format")), key="ga-fmt"
+        )
+
+    if st.button("Generate", type="primary", key="ga-go"):
+        errors = validate_common_attributes(common) + validate_free_text(free_text)
+        if not _show_validation_errors(errors):
+            return
+        logger.info("Generate Audio: clicked (multi_speaker=%s, accent=%s)", multi_speaker, accent)
+        try:
+            with st.spinner("Generating…"):
+                cap = AudioGenerate()
+                result = cap.process(
+                    CapabilityInput(
+                        text=free_text,
+                        params={
+                            "assessment_outcome": common.assessment_outcome,
+                            "difficulty_level": common.difficulty_level,
+                            "target_audience": common.target_audience,
+                            "question_type": common.question_type,
+                            "multi_speaker": multi_speaker,
+                            "accent": accent,
+                            "speed": speed,
+                            "tone": tone,
+                            "length": length,
+                            "model": model,
+                            "voice": voice,
+                            "output_format": output_format,
+                        },
+                    )
+                )
+            st.success("Done.")
+            st.audio(str(result.file_path))
+            with result.file_path.open("rb") as fh:
+                st.download_button(
+                    "Download", data=fh.read(), file_name=result.file_path.name,
+                    mime=result.metadata.get("mime_type", "audio/wav"),
+                )
+            if result.metadata.get("format_note"):
+                st.caption(f"ℹ {result.metadata['format_note']}")
+            with st.expander("Prompt sent to Gemini"):
+                st.text(result.text or "")
+            _render_cost(result.metadata)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Generate Audio: failed")
+            st.error(f"Failed: {exc}")
+            with st.expander("Traceback"):
+                st.code(traceback.format_exc())
+
+
+def _generate_video_tab() -> None:
+    st.subheader("Generate Video")
+    st.caption(
+        "Real constraints: Preview-only model, 4-8 second clips, generation can take several minutes, "
+        "billed per second of output. This produces one short clip, not a full scenario film."
+    )
+
+    s = load_config().capability("video_generate")
+    common = _common_attributes_form("gv")
+
+    cols = st.columns(3)
+    video_types = s.get("video_types") or ["Scenario Based"]
+    video_type = cols[0].selectbox("Video type", video_types, key="gv-type")
+    resolutions = s.get("available_resolutions") or [s.get("resolution", "720p")]
+    resolution = cols[1].selectbox("Resolution", resolutions, index=_idx(resolutions, s.get("resolution")), key="gv-res")
+    durations = s.get("available_durations_seconds") or [s.get("duration_seconds", 8)]
+    duration = cols[2].selectbox(
+        "Length (seconds)", durations, index=_idx(durations, s.get("duration_seconds")), key="gv-dur"
+    )
+
+    free_text = st.text_area(
+        "Scenario",
+        height=130,
+        placeholder="e.g. A student measuring the angle of a ramp with a protractor in a physics lab",
+        key="gv-freetext",
+    )
+
+    with st.expander("Advanced options", expanded=False):
+        models = s.get("available_models") or [s["model"]]
+        model = st.selectbox("Model", models, index=_idx(models, s["model"]), key="gv-model")
+        generate_audio = st.checkbox("Generate audio with the video", value=s.get("generate_audio", True), key="gv-audio")
+
+    if st.button("Generate", type="primary", key="gv-go"):
+        errors = validate_common_attributes(common) + validate_free_text(free_text)
+        if not _show_validation_errors(errors):
+            return
+        logger.info(
+            "Generate Video: clicked (video_type=%s, resolution=%s, duration=%ds)",
+            video_type, resolution, duration,
+        )
+        try:
+            with st.spinner(f"Generating video — this can take a few minutes (Veo, up to {int(s.get('poll_timeout_seconds', 360))}s)…"):
+                cap = VideoGenerate()
+                result = cap.process(
+                    CapabilityInput(
+                        text=free_text,
+                        params={
+                            "assessment_outcome": common.assessment_outcome,
+                            "difficulty_level": common.difficulty_level,
+                            "target_audience": common.target_audience,
+                            "question_type": common.question_type,
+                            "video_type": video_type,
+                            "model": model,
+                            "resolution": resolution,
+                            "duration_seconds": int(duration),
+                            "generate_audio": generate_audio,
+                        },
+                    )
+                )
+            st.success("Done.")
+            st.video(str(result.file_path))
+            with result.file_path.open("rb") as fh:
+                st.download_button(
+                    "Download MP4", data=fh.read(), file_name=result.file_path.name, mime="video/mp4"
+                )
+            with st.expander("Prompt sent to Veo"):
+                st.text(result.text or "")
+            _render_cost(result.metadata)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Generate Video: failed")
+            st.error(f"Failed: {exc}")
+            with st.expander("Traceback"):
+                st.code(traceback.format_exc())
+
+
+# ----------------------------------------------------------------------
 # Page layout
 # ----------------------------------------------------------------------
 
@@ -389,7 +775,10 @@ st.caption("POC for SME content authoring. Built on Vertex AI.")
 _config_ok = _show_config_status()
 _show_session_cost()
 
-tabs = st.tabs([
+st.header("Transform Existing Content")
+st.caption("Enhance or analyse material the SME already produced — a sketch, a recording, a video.")
+
+transform_tabs = st.tabs([
     "Image",
     "Text → Audio",
     "Audio → Audio",
@@ -398,7 +787,7 @@ tabs = st.tabs([
     "Audio → Questions",
 ])
 
-with tabs[0]:
+with transform_tabs[0]:
     _capability_tab(
         title="Image — hand-drawn diagram → professional render",
         description=(
@@ -413,9 +802,11 @@ with tabs[0]:
         ),
         run=_run_image,
         output_renderer=_render_image_output,
+        options_renderer=_image_enhance_options,
+        options_label="Model & resolution",
     )
 
-with tabs[1]:
+with transform_tabs[1]:
     _capability_tab(
         title="Text → Audio",
         description="Paste a script. Get studio-quality narration in the chosen voice preset.",
@@ -426,9 +817,11 @@ with tabs[1]:
         ),
         run=_run_text_to_speech,
         output_renderer=_render_audio_output,
+        options_renderer=_tts_options,
+        options_label="Model & voice",
     )
 
-with tabs[2]:
+with transform_tabs[2]:
     _capability_tab(
         title="Audio → Audio",
         description=(
@@ -439,9 +832,11 @@ with tabs[2]:
         default_instruction="",
         run=_run_audio_to_audio,
         output_renderer=_render_audio_output,
+        options_renderer=_audio_to_audio_options,
+        options_label="Models & voice",
     )
 
-with tabs[3]:
+with transform_tabs[3]:
     _capability_tab(
         title="Video → Questions",
         description="Upload a lecture/explainer video. Get draft questions + answer key.",
@@ -452,9 +847,11 @@ with tabs[3]:
         ),
         run=_run_video_questions,
         output_renderer=_render_questions_output,
+        options_renderer=_video_questions_options,
+        options_label="Question settings",
     )
 
-with tabs[4]:
+with transform_tabs[4]:
     _capability_tab(
         title="Video → Professional",
         description=(
@@ -465,7 +862,28 @@ with tabs[4]:
         default_instruction="",
         run=_run_video_enhance,
         output_renderer=_render_video_output,
+        options_renderer=_video_enhance_options,
+        options_label="Pipeline options",
     )
 
-with tabs[5]:
+with transform_tabs[5]:
     _audio_questions_tab()
+
+st.divider()
+st.header("Generate New Content")
+st.caption("No source material needed — describe what's wanted via a structured, validated prompt.")
+
+generate_tabs = st.tabs([
+    "Generate Image",
+    "Generate Audio",
+    "Generate Video",
+])
+
+with generate_tabs[0]:
+    _generate_image_tab()
+
+with generate_tabs[1]:
+    _generate_audio_tab()
+
+with generate_tabs[2]:
+    _generate_video_tab()

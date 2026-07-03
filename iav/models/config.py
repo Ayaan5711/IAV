@@ -111,10 +111,12 @@ def _resolve_vertex_settings(raw: dict[str, Any]) -> VertexConfig:
     if not project_id:
         try:
             project_id = _read_credentials(creds_path).get("project_id")
+            logger.info("project_id not set via env/config; read from %s", creds_path)
         except FileNotFoundError:
             project_id = None
 
     if not project_id:
+        logger.error("Could not resolve project_id from env, config.yaml, or %s", creds_path)
         raise RuntimeError(
             "Could not resolve project_id. Set VERTEX_AI_PROJECT_ID or "
             "PROJECT_ID, fill vertex_ai.project_id in config.yaml, or "
@@ -133,6 +135,7 @@ def _resolve_vertex_settings(raw: dict[str, Any]) -> VertexConfig:
 def load_config(path: Path | None = None) -> Config:
     config_path = Path(path) if path else _DEFAULT_CONFIG
     if not config_path.exists():
+        logger.error("Config file not found at %s", config_path)
         raise FileNotFoundError(f"Config file not found at {config_path}")
 
     with config_path.open("r", encoding="utf-8") as fh:
@@ -146,6 +149,11 @@ def load_config(path: Path | None = None) -> Config:
         max_wait_seconds=float(retry_raw.get("max_wait_seconds", 30.0)),
     )
     log_level = os.environ.get("LOG_LEVEL") or raw.get("logging", {}).get("level", "INFO")
+
+    logger.info(
+        "Config loaded from %s (project=%s, location=%s, %d capabilities)",
+        config_path, vertex.project_id, vertex.location, len(raw.get("capabilities", {}) or {}),
+    )
 
     return Config(
         vertex=vertex,
