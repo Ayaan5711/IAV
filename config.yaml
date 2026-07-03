@@ -51,9 +51,13 @@ pricing:
       output_text: 3.00
       output_image: 60.00
 
-    imagen-3.0-capability-001:  # billed per-image, not per-token — unsupported
+    imagen-3.0-capability-001:  # billed per-image, not per-token
+      # Rate reported by an LLM query (not an official Google source or
+      # Cloud Billing), so still unverified -- but a real estimate is more
+      # honest than showing $0.00 for an unsupported unit.
       verified: false
       unit: per_image
+      rate_per_image: 0.040
 
     gemini-2.5-flash:
       verified: true

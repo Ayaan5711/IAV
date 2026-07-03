@@ -80,6 +80,9 @@ def estimate_cost(
             model=model, entry=entry, duration_seconds=duration_seconds, resolution=resolution, verified=verified
         )
 
+    if unit == "per_image":
+        return _estimate_flat_image_cost(model=model, entry=entry, output_images=output_images, verified=verified)
+
     notes: list[str] = []
     breakdown: dict[str, float] = {}
     input_usd = 0.0
@@ -179,6 +182,30 @@ def _estimate_video_cost(
         verified=verified,
         output_usd=output_usd,
         breakdown={"output_video_seconds": output_usd},
+        tokens={"prompt": 0, "output": 0},
+        notes=notes,
+    )
+
+
+def _estimate_flat_image_cost(
+    *, model: str, entry: dict[str, Any], output_images: int, verified: bool
+) -> CostEstimate:
+    """Imagen bills a flat rate per image, not per token."""
+    notes: list[str] = []
+    rate = entry.get("rate_per_image")
+    if rate is None:
+        notes.append("No per-image rate configured for this model.")
+        return CostEstimate(model=model, usd=0.0, verified=verified, notes=notes)
+    count = max(output_images, 1)
+    output_usd = count * rate
+    if not verified:
+        notes.append("Rate unverified against an official Google source — confirm in Cloud Billing.")
+    return CostEstimate(
+        model=model,
+        usd=output_usd,
+        verified=verified,
+        output_usd=output_usd,
+        breakdown={"output_images": output_usd},
         tokens={"prompt": 0, "output": 0},
         notes=notes,
     )
