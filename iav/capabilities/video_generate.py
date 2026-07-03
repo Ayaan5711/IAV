@@ -57,11 +57,12 @@ class VideoGenerate(Capability):
         resolution = params.get("resolution") or self._settings.get("resolution", "720p")
         duration_seconds = int(params.get("duration_seconds") or self._settings.get("duration_seconds", 8))
         generate_audio = bool(params.get("generate_audio", self._settings.get("generate_audio", True)))
+        video_type = params.get("video_type") or self._settings["video_types"][0]
         poll_interval = float(self._settings.get("poll_interval_seconds", 10))
         poll_timeout = float(self._settings.get("poll_timeout_seconds", 360))
 
         prompt = self._settings["prompt_template"].format(
-            common_block=common_block(common), free_text=free_text
+            video_type=video_type, common_block=common_block(common), free_text=free_text
         )
 
         logger.info(
@@ -110,6 +111,7 @@ class VideoGenerate(Capability):
             text=prompt,
             metadata={
                 "model": model,
+                "video_type": video_type,
                 "resolution": resolution,
                 "duration_seconds": duration_seconds,
                 "generate_audio": generate_audio,

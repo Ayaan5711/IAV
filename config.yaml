@@ -325,6 +325,12 @@ capabilities:
     voice_preset: Kore
     available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
     sample_rate_hz: 24000
+    # Gemini TTS always returns raw PCM, wrapped as WAV. mp3 is a real
+    # conversion via ffmpeg (same dependency video_enhance already needs),
+    # not just a label -- if ffmpeg isn't on PATH, wav is returned instead
+    # and the result says so rather than silently mislabelling the file.
+    output_format: wav
+    available_formats: [wav, mp3]
     speaker_modes: [Single speaker, Multiple speakers]
     accents: [Neutral, US, UK, Indian, Australian]
     speeds: [Slow, Normal, Fast]
@@ -344,13 +350,15 @@ capabilities:
     available_models: [veo-3.1-generate-preview, veo-3.1-fast-generate-preview, veo-3.1-lite-generate-preview]
     resolution: "720p"
     available_resolutions: ["720p", "1080p"]
+    output_format: mp4   # the only format Veo returns -- no conversion needed
     duration_seconds: 8
     available_durations_seconds: [4, 6, 8]
+    video_types: [Scenario Based, Demonstration, Explanatory walkthrough]
     generate_audio: true
     poll_interval_seconds: 10
     poll_timeout_seconds: 360
     prompt_template: |
-      A scenario-based video for an assessment question.
+      A {video_type} video for an assessment question.
 
       {common_block}
 

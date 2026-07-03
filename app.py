@@ -621,13 +621,17 @@ def _generate_audio_tab() -> None:
     )
 
     with st.expander("Advanced options", expanded=False):
-        cols3 = st.columns(2)
+        cols3 = st.columns(3)
         models = s.get("available_models") or [s["model"]]
         model = cols3[0].selectbox("Model", models, index=_idx(models, s["model"]), key="ga-model")
         voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
         voice = cols3[1].selectbox(
             "Voice (single-speaker only)", voices, index=_idx(voices, s.get("voice_preset")),
             key="ga-voice", disabled=multi_speaker,
+        )
+        formats = s.get("available_formats") or [s.get("output_format", "wav")]
+        output_format = cols3[2].selectbox(
+            "Format (for CAE compatibility)", formats, index=_idx(formats, s.get("output_format")), key="ga-fmt"
         )
 
     if st.button("Generate", type="primary", key="ga-go"):
@@ -652,6 +656,7 @@ def _generate_audio_tab() -> None:
                             "length": length,
                             "model": model,
                             "voice": voice,
+                            "output_format": output_format,
                         },
                     )
                 )
@@ -659,8 +664,11 @@ def _generate_audio_tab() -> None:
             st.audio(str(result.file_path))
             with result.file_path.open("rb") as fh:
                 st.download_button(
-                    "Download", data=fh.read(), file_name=result.file_path.name, mime="audio/wav"
+                    "Download", data=fh.read(), file_name=result.file_path.name,
+                    mime=result.metadata.get("mime_type", "audio/wav"),
                 )
+            if result.metadata.get("format_note"):
+                st.caption(f"ℹ {result.metadata['format_note']}")
             with st.expander("Prompt sent to Gemini"):
                 st.text(result.text or "")
             _render_cost(result.metadata)
@@ -680,11 +688,13 @@ def _generate_video_tab() -> None:
     s = load_config().capability("video_generate")
     common = _common_attributes_form("gv")
 
-    cols = st.columns(2)
+    cols = st.columns(3)
+    video_types = s.get("video_types") or ["Scenario Based"]
+    video_type = cols[0].selectbox("Video type", video_types, key="gv-type")
     resolutions = s.get("available_resolutions") or [s.get("resolution", "720p")]
-    resolution = cols[0].selectbox("Resolution", resolutions, index=_idx(resolutions, s.get("resolution")), key="gv-res")
+    resolution = cols[1].selectbox("Resolution", resolutions, index=_idx(resolutions, s.get("resolution")), key="gv-res")
     durations = s.get("available_durations_seconds") or [s.get("duration_seconds", 8)]
-    duration = cols[1].selectbox(
+    duration = cols[2].selectbox(
         "Length (seconds)", durations, index=_idx(durations, s.get("duration_seconds")), key="gv-dur"
     )
 
@@ -715,6 +725,7 @@ def _generate_video_tab() -> None:
                             "difficulty_level": common.difficulty_level,
                             "target_audience": common.target_audience,
                             "question_type": common.question_type,
+                            "video_type": video_type,
                             "model": model,
                             "resolution": resolution,
                             "duration_seconds": int(duration),

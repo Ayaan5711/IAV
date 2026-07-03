@@ -10,7 +10,11 @@ from __future__ import annotations
 import io
 import logging
 import os
+import shutil
+import subprocess
+import tempfile
 import wave
+from pathlib import Path
 
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
 from iav.capabilities.prompt_schema import (
@@ -100,13 +104,19 @@ class AudioGenerate(Capability):
             raise AudioGenerateError(f"Model returned no audio. Model said: {note}")
 
         wav_bytes = _wrap_pcm_as_wav(result.audio_bytes, sample_rate=sample_rate)
-        output_path = save_output(data=wav_bytes, suffix=".wav", capability=self.name)
+
+        requested_format = (params.get("output_format") or self._settings.get("output_format", "wav")).lower()
+        output_bytes, actual_format, format_note = _maybe_convert_to_mp3(wav_bytes, requested_format)
+
+        output_path = save_output(data=output_bytes, suffix=f".{actual_format}", capability=self.name)
         cost = summarize_costs(
             [{"label": "audio_generate", "model": model, "usage": result.usage}],
             self.config.pricing,
         )
 
-        logger.info("audio_generate: wrote %s, est. cost $%.6f", output_path, cost["total_usd"])
+        logger.info(
+            "audio_generate: wrote %s (%s), est. cost $%.6f", output_path, actual_format, cost["total_usd"]
+        )
 
         return CapabilityOutput(
             file_path=output_path,
@@ -118,8 +128,9 @@ class AudioGenerate(Capability):
                 "speed": speed,
                 "tone": tone,
                 "length": length,
-                "output_bytes": len(wav_bytes),
-                "mime_type": "audio/wav",
+                "output_bytes": len(output_bytes),
+                "mime_type": "audio/mpeg" if actual_format == "mp3" else "audio/wav",
+                "format_note": format_note,
                 "cost": cost,
             },
         )
@@ -139,3 +150,31 @@ def _wrap_pcm_as_wav(
         wav.setframerate(sample_rate)
         wav.writeframes(pcm_bytes)
     return buf.getvalue()
+
+
+def _maybe_convert_to_mp3(wav_bytes: bytes, requested_format: str) -> tuple[bytes, str, str | None]:
+    """Converts WAV -> MP3 via ffmpeg if requested and available.
+
+    Returns (bytes, actual_format, note). Falls back to WAV with a note
+    rather than silently mislabelling the file if ffmpeg isn't on PATH.
+    """
+    if requested_format != "mp3":
+        return wav_bytes, "wav", None
+
+    if not shutil.which("ffmpeg"):
+        return wav_bytes, "wav", "mp3 requested but ffmpeg is not on PATH; returned wav instead."
+
+    with tempfile.TemporaryDirectory(prefix="iav-audio-") as tmp:
+        in_path = Path(tmp) / "in.wav"
+        out_path = Path(tmp) / "out.mp3"
+        in_path.write_bytes(wav_bytes)
+        proc = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(in_path), "-codec:a", "libmp3lame", "-qscale:a", "2", str(out_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if proc.returncode != 0 or not out_path.exists():
+            stderr_tail = (proc.stderr or b"").decode("utf-8", errors="replace")[-500:]
+            return wav_bytes, "wav", f"mp3 conversion failed, returned wav instead: {stderr_tail}"
+        return out_path.read_bytes(), "mp3", None
