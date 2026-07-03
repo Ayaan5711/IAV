@@ -1,13 +1,14 @@
 """Streamlit shell for the IAV media enhancement POC.
 
-Two families of tabs, both sharing the same Process → result → cost UX:
+Two sections, each its own row of tabs:
 
-  - Enhance/analyse: transform SME-supplied content (sketch, recording, video)
-  - Generate: create new media from a structured, validated prompt
+  - Transform Existing Content: enhance/analyse SME-supplied material
+  - Generate New Content: create new media from a structured, validated prompt
 
+Every tab follows the same shape: say what you want → (optional) tune
+advanced options, tucked into a collapsed expander → Process → result + cost.
 The UI never references a Gemini model ID directly except as a value pulled
-from config.yaml's available_* lists — every dropdown's options come from
-config, not from hardcoded Python.
+from config.yaml's available_* lists.
 """
 
 from __future__ import annotations
@@ -78,6 +79,7 @@ def _show_config_status() -> bool:
 
 def _show_session_cost() -> None:
     with st.sidebar:
+        st.divider()
         st.markdown("### Session cost (estimated)")
         total = st.session_state.get("session_cost_usd", 0.0)
         st.metric("Total this session", f"${total:.6f}")
@@ -134,8 +136,14 @@ def _capability_tab(
     run: Callable[[Any, str, dict], object],
     output_renderer: Callable[[object], None],
     options_renderer: Callable[[], dict] | None = None,
+    options_label: str = "Advanced options",
 ) -> None:
-    """Generic tab: upload/text → options → instruction → process → result."""
+    """Generic tab: input → instruction → advanced options → process → result.
+
+    Technical dials (model, voice, resolution, pipeline toggles) live inside
+    a collapsed expander so the default view is just "say what you want and
+    go" — the same shape for every tab, options tucked away until wanted.
+    """
     st.subheader(title)
     st.caption(description)
 
@@ -155,15 +163,19 @@ def _capability_tab(
         )
         text_input = None
 
-    params = options_renderer() if options_renderer else {}
-
     instruction = st.text_area(
         "Instruction (optional — leave blank to use the default)",
         value="",
         placeholder=default_instruction,
-        height=120,
+        height=100,
         key=f"instruction-{title}",
     )
+
+    if options_renderer:
+        with st.expander(options_label, expanded=False):
+            params = options_renderer()
+    else:
+        params = {}
 
     if st.button("Process", type="primary", key=f"go-{title}"):
         if accept_types is not None and uploaded is None:
@@ -192,7 +204,6 @@ def _capability_tab(
 
 def _common_attributes_form(key_prefix: str) -> CommonAttributes:
     """The four assessment-metadata fields shared by every generate tab."""
-    st.markdown("**Assessment metadata**")
     outcome = st.text_input(
         "Assessment outcome",
         placeholder="e.g. Apply the Pythagorean theorem to find a missing side",
@@ -222,7 +233,7 @@ def _show_validation_errors(errors: list[str]) -> bool:
 
 
 # ----------------------------------------------------------------------
-# Enhance / analyse tabs — transform SME-supplied content
+# Transform Existing Content — enhance/analyse SME-supplied material
 # ----------------------------------------------------------------------
 
 
@@ -358,7 +369,7 @@ def _video_enhance_options() -> dict:
     models = s.get("available_models") or [s["analysis_model"]]
     model = st.selectbox("Analysis model", models, index=_idx(models, s["analysis_model"]), key="ve-model")
 
-    st.markdown("**Pipeline steps**")
+    st.caption("Pipeline steps")
     pipeline_defaults = s.get("pipeline", {})
     cols = st.columns(5)
     stabilize = cols[0].checkbox("Stabilise", value=pipeline_defaults.get("stabilize", True), key="ve-stab")
@@ -417,7 +428,7 @@ def _render_video_output(result) -> None:  # type: ignore[no-untyped-def]
 
 def _audio_questions_tab() -> None:
     """Topic/passage -> narrated audio + text comprehension questions."""
-    st.subheader("Audio → Questions — topic or passage → narrated audio + questions")
+    st.subheader("Audio → Questions")
     st.caption(
         "Give a topic and Gemini writes a passage, or paste your own passage/script. "
         "Either way: narrated audio plus text comprehension questions with an answer key."
@@ -447,18 +458,18 @@ def _audio_questions_tab() -> None:
     qtype = cols[1].selectbox("Question type", ["mcq", "short_answer", "conceptual"], key="aq-type")
     level = cols[2].selectbox("Level", ["school", "undergraduate", "postgraduate"], index=1, key="aq-level")
 
-    cols2 = st.columns(2)
-    text_models = s.get("available_text_models") or [s["text_model"]]
-    text_model = cols2[0].selectbox("Text model", text_models, index=_idx(text_models, s["text_model"]), key="aq-textmodel")
-    voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
-    voice = cols2[1].selectbox("Voice", voices, index=_idx(voices, s.get("voice_preset")), key="aq-voice")
-
-    instruction = st.text_area(
-        "Narration instruction (optional — leave blank to use the default)",
-        value="",
-        height=80,
-        key="aq-instruction",
-    )
+    with st.expander("Advanced options", expanded=False):
+        cols2 = st.columns(2)
+        text_models = s.get("available_text_models") or [s["text_model"]]
+        text_model = cols2[0].selectbox("Text model", text_models, index=_idx(text_models, s["text_model"]), key="aq-textmodel")
+        voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
+        voice = cols2[1].selectbox("Voice", voices, index=_idx(voices, s.get("voice_preset")), key="aq-voice")
+        instruction = st.text_area(
+            "Narration instruction (optional — leave blank to use the default)",
+            value="",
+            height=80,
+            key="aq-instruction",
+        )
 
     if st.button("Process", type="primary", key="aq-go"):
         if not (text_input or "").strip():
@@ -514,12 +525,12 @@ def _render_audio_questions_output(result) -> None:  # type: ignore[no-untyped-d
 
 
 # ----------------------------------------------------------------------
-# Generate tabs — new media from a structured, validated prompt
+# Generate New Content — new media from a structured, validated prompt
 # ----------------------------------------------------------------------
 
 
 def _generate_image_tab() -> None:
-    st.subheader("Generate Image — structured prompt → new exam image")
+    st.subheader("Generate Image")
     st.caption("No sketch needed — describe what's wanted and Gemini generates it from scratch.")
 
     s = load_config().capability("image_generate")
@@ -529,20 +540,21 @@ def _generate_image_tab() -> None:
     visual_type = cols[0].selectbox("Visual type", s["visual_types"], key="gi-visual")
     style = cols[1].selectbox("Style", s["styles"], key="gi-style")
 
-    cols2 = st.columns(3)
-    models = s.get("available_models") or [s["model"]]
-    model = cols2[0].selectbox("Model", models, index=_idx(models, s["model"]), key="gi-model")
-    resolutions = s.get("available_resolutions") or [s.get("resolution", "2K")]
-    resolution = cols2[1].selectbox("Resolution", resolutions, index=_idx(resolutions, s.get("resolution")), key="gi-res")
-    formats = s.get("available_formats") or [s.get("output_format", "png")]
-    output_format = cols2[2].selectbox("Format (for CAE compatibility)", formats, index=_idx(formats, s.get("output_format")), key="gi-fmt")
-
     free_text = st.text_area(
         "Describe the image",
-        height=120,
+        height=110,
         placeholder="e.g. A right triangle with legs 3 and 4, hypotenuse labelled c",
         key="gi-freetext",
     )
+
+    with st.expander("Advanced options", expanded=False):
+        cols2 = st.columns(3)
+        models = s.get("available_models") or [s["model"]]
+        model = cols2[0].selectbox("Model", models, index=_idx(models, s["model"]), key="gi-model")
+        resolutions = s.get("available_resolutions") or [s.get("resolution", "2K")]
+        resolution = cols2[1].selectbox("Resolution", resolutions, index=_idx(resolutions, s.get("resolution")), key="gi-res")
+        formats = s.get("available_formats") or [s.get("output_format", "png")]
+        output_format = cols2[2].selectbox("Format (for CAE compatibility)", formats, index=_idx(formats, s.get("output_format")), key="gi-fmt")
 
     if st.button("Generate", type="primary", key="gi-go"):
         errors = validate_common_attributes(common) + validate_free_text(free_text)
@@ -584,7 +596,7 @@ def _generate_image_tab() -> None:
 
 
 def _generate_audio_tab() -> None:
-    st.subheader("Generate Audio — structured prompt → new narration")
+    st.subheader("Generate Audio")
     st.caption("No recording needed — describe the content and delivery, Gemini narrates it from scratch.")
 
     s = load_config().capability("audio_generate")
@@ -599,22 +611,24 @@ def _generate_audio_tab() -> None:
     speed = cols2[0].selectbox("Speed", s["speeds"], key="ga-speed")
     tone = cols2[1].selectbox("Tone", s["tones"], key="ga-tone")
 
-    cols3 = st.columns(3)
-    length = cols3[0].selectbox("Length", s["lengths"], key="ga-length")
-    models = s.get("available_models") or [s["model"]]
-    model = cols3[1].selectbox("Model", models, index=_idx(models, s["model"]), key="ga-model")
-    voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
-    voice = cols3[2].selectbox(
-        "Voice (single-speaker only)", voices, index=_idx(voices, s.get("voice_preset")),
-        key="ga-voice", disabled=multi_speaker,
-    )
+    length = st.selectbox("Length", s["lengths"], key="ga-length")
 
     free_text = st.text_area(
         "Content to narrate",
-        height=140,
+        height=130,
         placeholder="e.g. Explain the water cycle in three stages: evaporation, condensation, precipitation.",
         key="ga-freetext",
     )
+
+    with st.expander("Advanced options", expanded=False):
+        cols3 = st.columns(2)
+        models = s.get("available_models") or [s["model"]]
+        model = cols3[0].selectbox("Model", models, index=_idx(models, s["model"]), key="ga-model")
+        voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
+        voice = cols3[1].selectbox(
+            "Voice (single-speaker only)", voices, index=_idx(voices, s.get("voice_preset")),
+            key="ga-voice", disabled=multi_speaker,
+        )
 
     if st.button("Generate", type="primary", key="ga-go"):
         errors = validate_common_attributes(common) + validate_free_text(free_text)
@@ -657,7 +671,7 @@ def _generate_audio_tab() -> None:
 
 
 def _generate_video_tab() -> None:
-    st.subheader("Generate Video — structured prompt → new scenario clip (Veo)")
+    st.subheader("Generate Video")
     st.caption(
         "Real constraints: Preview-only model, 4-8 second clips, generation can take several minutes, "
         "billed per second of output. This produces one short clip, not a full scenario film."
@@ -666,24 +680,25 @@ def _generate_video_tab() -> None:
     s = load_config().capability("video_generate")
     common = _common_attributes_form("gv")
 
-    cols = st.columns(3)
-    models = s.get("available_models") or [s["model"]]
-    model = cols[0].selectbox("Model", models, index=_idx(models, s["model"]), key="gv-model")
+    cols = st.columns(2)
     resolutions = s.get("available_resolutions") or [s.get("resolution", "720p")]
-    resolution = cols[1].selectbox("Resolution", resolutions, index=_idx(resolutions, s.get("resolution")), key="gv-res")
+    resolution = cols[0].selectbox("Resolution", resolutions, index=_idx(resolutions, s.get("resolution")), key="gv-res")
     durations = s.get("available_durations_seconds") or [s.get("duration_seconds", 8)]
-    duration = cols[2].selectbox(
+    duration = cols[1].selectbox(
         "Length (seconds)", durations, index=_idx(durations, s.get("duration_seconds")), key="gv-dur"
     )
 
-    generate_audio = st.checkbox("Generate audio with the video", value=s.get("generate_audio", True), key="gv-audio")
-
     free_text = st.text_area(
         "Scenario",
-        height=140,
+        height=130,
         placeholder="e.g. A student measuring the angle of a ramp with a protractor in a physics lab",
         key="gv-freetext",
     )
+
+    with st.expander("Advanced options", expanded=False):
+        models = s.get("available_models") or [s["model"]]
+        model = st.selectbox("Model", models, index=_idx(models, s["model"]), key="gv-model")
+        generate_audio = st.checkbox("Generate audio with the video", value=s.get("generate_audio", True), key="gv-audio")
 
     if st.button("Generate", type="primary", key="gv-go"):
         errors = validate_common_attributes(common) + validate_free_text(free_text)
@@ -733,19 +748,19 @@ st.caption("POC for SME content authoring. Built on Vertex AI.")
 _config_ok = _show_config_status()
 _show_session_cost()
 
-tabs = st.tabs([
+st.header("Transform Existing Content")
+st.caption("Enhance or analyse material the SME already produced — a sketch, a recording, a video.")
+
+transform_tabs = st.tabs([
     "Image",
     "Text → Audio",
     "Audio → Audio",
     "Video → Questions",
     "Video → Professional",
     "Audio → Questions",
-    "Generate Image",
-    "Generate Audio",
-    "Generate Video",
 ])
 
-with tabs[0]:
+with transform_tabs[0]:
     _capability_tab(
         title="Image — hand-drawn diagram → professional render",
         description=(
@@ -761,9 +776,10 @@ with tabs[0]:
         run=_run_image,
         output_renderer=_render_image_output,
         options_renderer=_image_enhance_options,
+        options_label="Model & resolution",
     )
 
-with tabs[1]:
+with transform_tabs[1]:
     _capability_tab(
         title="Text → Audio",
         description="Paste a script. Get studio-quality narration in the chosen voice preset.",
@@ -775,9 +791,10 @@ with tabs[1]:
         run=_run_text_to_speech,
         output_renderer=_render_audio_output,
         options_renderer=_tts_options,
+        options_label="Model & voice",
     )
 
-with tabs[2]:
+with transform_tabs[2]:
     _capability_tab(
         title="Audio → Audio",
         description=(
@@ -789,9 +806,10 @@ with tabs[2]:
         run=_run_audio_to_audio,
         output_renderer=_render_audio_output,
         options_renderer=_audio_to_audio_options,
+        options_label="Models & voice",
     )
 
-with tabs[3]:
+with transform_tabs[3]:
     _capability_tab(
         title="Video → Questions",
         description="Upload a lecture/explainer video. Get draft questions + answer key.",
@@ -803,9 +821,10 @@ with tabs[3]:
         run=_run_video_questions,
         output_renderer=_render_questions_output,
         options_renderer=_video_questions_options,
+        options_label="Question settings",
     )
 
-with tabs[4]:
+with transform_tabs[4]:
     _capability_tab(
         title="Video → Professional",
         description=(
@@ -817,16 +836,27 @@ with tabs[4]:
         run=_run_video_enhance,
         output_renderer=_render_video_output,
         options_renderer=_video_enhance_options,
+        options_label="Pipeline options",
     )
 
-with tabs[5]:
+with transform_tabs[5]:
     _audio_questions_tab()
 
-with tabs[6]:
+st.divider()
+st.header("Generate New Content")
+st.caption("No source material needed — describe what's wanted via a structured, validated prompt.")
+
+generate_tabs = st.tabs([
+    "Generate Image",
+    "Generate Audio",
+    "Generate Video",
+])
+
+with generate_tabs[0]:
     _generate_image_tab()
 
-with tabs[7]:
+with generate_tabs[1]:
     _generate_audio_tab()
 
-with tabs[8]:
+with generate_tabs[2]:
     _generate_video_tab()
