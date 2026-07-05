@@ -361,6 +361,10 @@ class GeminiClient:
         logger.info(
             "generate_video: completed in %.0fs, %d bytes", elapsed, len(video_bytes or b"")
         )
+        logger.info(
+            "Gemini response metadata: operation_name=%s operation_metadata=%s mime_type=%s",
+            operation.name, operation.metadata, video.mime_type,
+        )
 
         gen_result = GenerationResult(raw=operation)
         gen_result.video_bytes = video_bytes
@@ -404,6 +408,13 @@ def _extract_usage(response: Any) -> UsageInfo | None:
     meta = getattr(response, "usage_metadata", None)
     if meta is None:
         return None
+
+    logger.info(
+        "Gemini response metadata: model_version=%s response_id=%s usage_metadata=%s",
+        getattr(response, "model_version", None),
+        getattr(response, "response_id", None),
+        meta.model_dump(exclude_none=True) if hasattr(meta, "model_dump") else meta,
+    )
 
     def _modality_breakdown(details: Any) -> dict[str, int]:
         breakdown: dict[str, int] = {}
