@@ -106,7 +106,10 @@ def _render_cost(metadata: dict | None) -> None:
     if calls and prompt_tok == 0 and output_tok == 0:
         st.caption("⚠ No usage data returned by the API — cost could not be estimated for this call.")
 
+    thoughts_tok = cost.get("total_thoughts_tokens", 0)
     label = f"Cost — est. ${total:.6f} ({prompt_tok:,} in / {output_tok:,} out tokens)"
+    if thoughts_tok:
+        label += f", {thoughts_tok:,} reasoning tokens"
     with st.expander(label, expanded=False):
         if cost.get("any_unverified"):
             st.warning("Some rates below are unverified against an official Google source.")
@@ -119,6 +122,15 @@ def _render_cost(metadata: dict | None) -> None:
             cols[1].metric("Output tokens", f"{tok.get('output', 0):,}")
             cols[2].metric("Input cost", f"${call.get('input_usd', 0.0):.6f}")
             cols[3].metric("Output cost", f"${call.get('output_usd', 0.0):.6f}")
+            if tok.get("thoughts") or tok.get("tool_use") or tok.get("cached"):
+                extras = []
+                if tok.get("thoughts"):
+                    extras.append(f"{tok['thoughts']:,} reasoning tokens (billed with output)")
+                if tok.get("tool_use"):
+                    extras.append(f"{tok['tool_use']:,} tool-use tokens (billed with input)")
+                if tok.get("cached"):
+                    extras.append(f"{tok['cached']:,} cached tokens")
+                st.caption("Also: " + " · ".join(extras))
             for note in call.get("notes", []):
                 st.caption(f"ℹ {note}")
             st.divider()
