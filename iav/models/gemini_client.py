@@ -427,10 +427,35 @@ def _extract_usage(response: Any) -> UsageInfo | None:
             breakdown[key] = breakdown.get(key, 0) + int(count)
         return breakdown
 
+    prompt_tokens = int(getattr(meta, "prompt_token_count", 0) or 0)
+    output_tokens = int(getattr(meta, "candidates_token_count", 0) or 0)
+    thoughts_tokens = int(getattr(meta, "thoughts_token_count", 0) or 0)
+    tool_use_tokens = int(getattr(meta, "tool_use_prompt_token_count", 0) or 0)
+    cached_tokens = int(getattr(meta, "cached_content_token_count", 0) or 0)
+    total_tokens = int(getattr(meta, "total_token_count", 0) or 0)
+
+    # Google documents total_token_count as prompt + candidates + tool_use +
+    # thoughts. If our read of the parts doesn't add up to Google's own
+    # total, something in this extraction is wrong -- surface it loudly
+    # rather than let a silent mismatch produce a wrong displayed cost.
+    computed_total = prompt_tokens + output_tokens + tool_use_tokens + thoughts_tokens
+    if total_tokens and computed_total != total_tokens:
+        logger.warning(
+            "Token accounting mismatch: parts sum to %d but Google reports total_token_count=%d "
+            "(prompt=%d, output=%d, thoughts=%d, tool_use=%d)",
+            computed_total, total_tokens, prompt_tokens, output_tokens, thoughts_tokens, tool_use_tokens,
+        )
+
+    if thoughts_tokens:
+        logger.info("Reasoning/thinking tokens present: %d (billed as output tokens)", thoughts_tokens)
+
     return UsageInfo(
-        prompt_tokens=int(getattr(meta, "prompt_token_count", 0) or 0),
-        output_tokens=int(getattr(meta, "candidates_token_count", 0) or 0),
-        total_tokens=int(getattr(meta, "total_token_count", 0) or 0),
+        prompt_tokens=prompt_tokens,
+        output_tokens=output_tokens,
+        thoughts_tokens=thoughts_tokens,
+        tool_use_prompt_tokens=tool_use_tokens,
+        cached_tokens=cached_tokens,
+        total_tokens=total_tokens,
         prompt_modality_breakdown=_modality_breakdown(getattr(meta, "prompt_tokens_details", None)),
         output_modality_breakdown=_modality_breakdown(getattr(meta, "candidates_tokens_details", None)),
     )
