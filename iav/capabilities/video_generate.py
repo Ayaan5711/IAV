@@ -58,6 +58,7 @@ class VideoGenerate(Capability):
         duration_seconds = int(params.get("duration_seconds") or self._settings.get("duration_seconds", 8))
         generate_audio = bool(params.get("generate_audio", self._settings.get("generate_audio", True)))
         video_type = params.get("video_type") or self._settings["video_types"][0]
+        location = params.get("location") or self._settings.get("location")
         poll_interval = float(self._settings.get("poll_interval_seconds", 10))
         poll_timeout = float(self._settings.get("poll_timeout_seconds", 360))
 
@@ -66,8 +67,8 @@ class VideoGenerate(Capability):
         )
 
         logger.info(
-            "video_generate: model=%s resolution=%s duration=%ds",
-            model, resolution, duration_seconds,
+            "video_generate: model=%s resolution=%s duration=%ds location=%s",
+            model, resolution, duration_seconds, location,
         )
 
         try:
@@ -79,6 +80,7 @@ class VideoGenerate(Capability):
                 generate_audio=generate_audio,
                 poll_interval_seconds=poll_interval,
                 poll_timeout_seconds=poll_timeout,
+                location=location,
             )
         except GeminiCallError as exc:
             raise VideoGenerateError(f"Veo call failed: {exc}") from exc

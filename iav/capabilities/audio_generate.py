@@ -1,8 +1,11 @@
 """Generate Audio — structured prompt → new narrated audio.
 
 Unlike audio_to_audio (which re-narrates an existing recording), this
-generates narration from nothing: assessment metadata + speaker/accent/
-speed/tone/length attributes, sent straight to Gemini TTS.
+generates narration from nothing. Two input modes:
+  - topic:  a short brief. Gemini writes the actual narration script first,
+            then narrates that -- otherwise TTS would just read the brief
+            back verbatim instead of producing an explanation.
+  - script: the user pastes the exact final script, narrated as-is.
 """
 
 from __future__ import annotations
@@ -46,8 +49,9 @@ class AudioGenerate(Capability):
         self._settings = self.config.capability(self.name)
 
     def process(self, payload: CapabilityInput) -> CapabilityOutput:
-        free_text = (payload.text or payload.instruction or "").strip()
+        raw_text = (payload.text or payload.instruction or "").strip()
         params = payload.params or {}
+        mode = params.get("mode", "topic")  # "topic" | "script"
         common = CommonAttributes(
             assessment_outcome=params.get("assessment_outcome", ""),
             difficulty_level=params.get("difficulty_level", "medium"),
@@ -61,16 +65,36 @@ class AudioGenerate(Capability):
         multi_speaker = bool(params.get("multi_speaker", False))
         voice = params.get("voice") or self._settings.get("voice_preset", "Kore")
 
-        errors = validate_common_attributes(common) + validate_free_text(free_text)
+        errors = validate_common_attributes(common) + validate_free_text(raw_text)
         if errors:
             raise ValueError("; ".join(errors))
 
-        model = os.environ.get("GEMINI_TTS_MODEL") or params.get("model") or self._settings["model"]
+        tts_model = os.environ.get("GEMINI_TTS_MODEL") or params.get("model") or self._settings["model"]
+        text_model = params.get("text_model") or self._settings.get("text_model", tts_model)
         sample_rate = int(self._settings.get("sample_rate_hz", 24000))
+
+        calls: list[dict] = []
+
+        if mode == "script":
+            content = raw_text
+        else:
+            word_count = self._settings.get("length_word_counts", {}).get(length, 150)
+            content_prompt = self._settings["content_instruction"].format(
+                word_count=word_count, common_block=common_block(common), free_text=raw_text,
+            )
+            logger.info("audio_generate: writing narration content (target ~%d words)", word_count)
+            try:
+                content_result = self.client.generate_text(model=text_model, prompt=content_prompt)
+            except GeminiCallError as exc:
+                raise AudioGenerateError(f"Narration content generation failed: {exc}") from exc
+            calls.append({"label": "write_narration", "model": text_model, "usage": content_result.usage})
+            content = (content_result.text or "").strip()
+            if not content:
+                raise AudioGenerateError("Model returned no narration content.")
 
         prompt = self._settings["prompt_template"].format(
             tone=tone, speed=speed, accent=accent, length=length,
-            common_block=common_block(common), free_text=free_text,
+            common_block=common_block(common), free_text=content,
         )
 
         speakers = None
@@ -85,19 +109,20 @@ class AudioGenerate(Capability):
             )
 
         logger.info(
-            "audio_generate: model=%s multi_speaker=%s accent=%s speed=%s tone=%s",
-            model, multi_speaker, accent, speed, tone,
+            "audio_generate: mode=%s tts_model=%s multi_speaker=%s accent=%s speed=%s tone=%s",
+            mode, tts_model, multi_speaker, accent, speed, tone,
         )
 
         try:
             result = self.client.synthesize_speech(
-                model=model,
+                model=tts_model,
                 script=prompt,
                 voice_preset=None if speakers else voice,
                 speakers=speakers,
             )
         except GeminiCallError as exc:
             raise AudioGenerateError(f"Gemini TTS call failed: {exc}") from exc
+        calls.append({"label": "narrate", "model": tts_model, "usage": result.usage})
 
         if not result.audio_bytes:
             note = (result.text or "").strip() or "(no detail)"
@@ -109,10 +134,7 @@ class AudioGenerate(Capability):
         output_bytes, actual_format, format_note = _maybe_convert_to_mp3(wav_bytes, requested_format)
 
         output_path = save_output(data=output_bytes, suffix=f".{actual_format}", capability=self.name)
-        cost = summarize_costs(
-            [{"label": "audio_generate", "model": model, "usage": result.usage}],
-            self.config.pricing,
-        )
+        cost = summarize_costs(calls, self.config.pricing)
 
         logger.info(
             "audio_generate: wrote %s (%s), est. cost $%.6f", output_path, actual_format, cost["total_usd"]
@@ -122,7 +144,10 @@ class AudioGenerate(Capability):
             file_path=output_path,
             text=prompt,
             metadata={
-                "model": model,
+                "mode": mode,
+                "narration_content": content,
+                "tts_model": tts_model,
+                "text_model": text_model,
                 "multi_speaker": multi_speaker,
                 "accent": accent,
                 "speed": speed,

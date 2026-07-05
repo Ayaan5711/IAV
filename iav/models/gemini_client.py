@@ -79,6 +79,27 @@ class GeminiClient:
             project=config.vertex.project_id,
             location=config.vertex.location,
         )
+        self._clients_by_location: dict[str, genai.Client] = {config.vertex.location: self._client}
+
+    def _client_for(self, location: str | None) -> genai.Client:
+        """Returns the default client, or a location-scoped one if given.
+
+        Veo has historically had narrower regional availability than the
+        text/image/audio models -- 'global' (the default everywhere else)
+        may 404 for video generation even on a project with Veo access.
+        Rather than force every capability onto one region, this lets a
+        single call target a different location on demand.
+        """
+        if not location or location == self.config.vertex.location:
+            return self._client
+        if location not in self._clients_by_location:
+            logger.info("Creating a location-scoped client for '%s'", location)
+            self._clients_by_location[location] = genai.Client(
+                vertexai=True,
+                project=self.config.vertex.project_id,
+                location=location,
+            )
+        return self._clients_by_location[location]
 
     # ------------------------------------------------------------------
     # Generic call helpers
@@ -275,6 +296,7 @@ class GeminiClient:
         generate_audio: bool = True,
         poll_interval_seconds: float = 10.0,
         poll_timeout_seconds: float = 360.0,
+        location: str | None = None,
     ) -> GenerationResult:
         """Text-to-video via Veo. Long-running: submits a job, polls until done.
 
@@ -283,6 +305,7 @@ class GeminiClient:
         the returned result carries no usage info. Cost is computed
         separately from duration_seconds.
         """
+        client = self._client_for(location)
         config = genai_types.GenerateVideosConfig(
             duration_seconds=duration_seconds,
             aspect_ratio=aspect_ratio,
@@ -290,11 +313,11 @@ class GeminiClient:
             generate_audio=generate_audio,
         )
         logger.info(
-            "generate_video: submitting model=%s duration=%ds resolution=%s",
-            model, duration_seconds, resolution,
+            "generate_video: submitting model=%s duration=%ds resolution=%s location=%s",
+            model, duration_seconds, resolution, location or self.config.vertex.location,
         )
         try:
-            operation = self._client.models.generate_videos(model=model, prompt=prompt, config=config)
+            operation = client.models.generate_videos(model=model, prompt=prompt, config=config)
         except Exception as exc:
             logger.exception("generate_video: submission failed (model=%s)", model)
             raise GeminiCallError(str(exc)) from exc
@@ -314,7 +337,7 @@ class GeminiClient:
             elapsed += poll_interval_seconds
             logger.debug("generate_video: polling operation %s (%.0fs elapsed)", operation.name, elapsed)
             try:
-                operation = self._client.operations.get(operation)
+                operation = client.operations.get(operation)
             except Exception as exc:
                 logger.exception("generate_video: polling failed after %.0fs", elapsed)
                 raise GeminiCallError(str(exc)) from exc
@@ -333,7 +356,7 @@ class GeminiClient:
         video_bytes = video.video_bytes
         if not video_bytes and video.uri:
             logger.debug("generate_video: downloading video bytes from %s", video.uri)
-            video_bytes = self._client.files.download(file=generated)
+            video_bytes = client.files.download(file=generated)
 
         logger.info(
             "generate_video: completed in %.0fs, %d bytes", elapsed, len(video_bytes or b"")
