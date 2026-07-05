@@ -79,6 +79,27 @@ class GeminiClient:
             project=config.vertex.project_id,
             location=config.vertex.location,
         )
+        self._clients_by_location: dict[str, genai.Client] = {config.vertex.location: self._client}
+
+    def _client_for(self, location: str | None) -> genai.Client:
+        """Returns the default client, or a location-scoped one if given.
+
+        Veo has historically had narrower regional availability than the
+        text/image/audio models -- 'global' (the default everywhere else)
+        may 404 for video generation even on a project with Veo access.
+        Rather than force every capability onto one region, this lets a
+        single call target a different location on demand.
+        """
+        if not location or location == self.config.vertex.location:
+            return self._client
+        if location not in self._clients_by_location:
+            logger.info("Creating a location-scoped client for '%s'", location)
+            self._clients_by_location[location] = genai.Client(
+                vertexai=True,
+                project=self.config.vertex.project_id,
+                location=location,
+            )
+        return self._clients_by_location[location]
 
     # ------------------------------------------------------------------
     # Generic call helpers
@@ -275,6 +296,7 @@ class GeminiClient:
         generate_audio: bool = True,
         poll_interval_seconds: float = 10.0,
         poll_timeout_seconds: float = 360.0,
+        location: str | None = None,
     ) -> GenerationResult:
         """Text-to-video via Veo. Long-running: submits a job, polls until done.
 
@@ -283,6 +305,7 @@ class GeminiClient:
         the returned result carries no usage info. Cost is computed
         separately from duration_seconds.
         """
+        client = self._client_for(location)
         config = genai_types.GenerateVideosConfig(
             duration_seconds=duration_seconds,
             aspect_ratio=aspect_ratio,
@@ -290,11 +313,11 @@ class GeminiClient:
             generate_audio=generate_audio,
         )
         logger.info(
-            "generate_video: submitting model=%s duration=%ds resolution=%s",
-            model, duration_seconds, resolution,
+            "generate_video: submitting model=%s duration=%ds resolution=%s location=%s",
+            model, duration_seconds, resolution, location or self.config.vertex.location,
         )
         try:
-            operation = self._client.models.generate_videos(model=model, prompt=prompt, config=config)
+            operation = client.models.generate_videos(model=model, prompt=prompt, config=config)
         except Exception as exc:
             logger.exception("generate_video: submission failed (model=%s)", model)
             raise GeminiCallError(str(exc)) from exc
@@ -314,7 +337,7 @@ class GeminiClient:
             elapsed += poll_interval_seconds
             logger.debug("generate_video: polling operation %s (%.0fs elapsed)", operation.name, elapsed)
             try:
-                operation = self._client.operations.get(operation)
+                operation = client.operations.get(operation)
             except Exception as exc:
                 logger.exception("generate_video: polling failed after %.0fs", elapsed)
                 raise GeminiCallError(str(exc)) from exc
@@ -333,10 +356,14 @@ class GeminiClient:
         video_bytes = video.video_bytes
         if not video_bytes and video.uri:
             logger.debug("generate_video: downloading video bytes from %s", video.uri)
-            video_bytes = self._client.files.download(file=generated)
+            video_bytes = client.files.download(file=generated)
 
         logger.info(
             "generate_video: completed in %.0fs, %d bytes", elapsed, len(video_bytes or b"")
+        )
+        logger.info(
+            "Gemini response metadata: operation_name=%s operation_metadata=%s mime_type=%s",
+            operation.name, operation.metadata, video.mime_type,
         )
 
         gen_result = GenerationResult(raw=operation)
@@ -382,6 +409,13 @@ def _extract_usage(response: Any) -> UsageInfo | None:
     if meta is None:
         return None
 
+    logger.info(
+        "Gemini response metadata: model_version=%s response_id=%s usage_metadata=%s",
+        getattr(response, "model_version", None),
+        getattr(response, "response_id", None),
+        meta.model_dump(exclude_none=True) if hasattr(meta, "model_dump") else meta,
+    )
+
     def _modality_breakdown(details: Any) -> dict[str, int]:
         breakdown: dict[str, int] = {}
         for item in details or []:
@@ -393,10 +427,35 @@ def _extract_usage(response: Any) -> UsageInfo | None:
             breakdown[key] = breakdown.get(key, 0) + int(count)
         return breakdown
 
+    prompt_tokens = int(getattr(meta, "prompt_token_count", 0) or 0)
+    output_tokens = int(getattr(meta, "candidates_token_count", 0) or 0)
+    thoughts_tokens = int(getattr(meta, "thoughts_token_count", 0) or 0)
+    tool_use_tokens = int(getattr(meta, "tool_use_prompt_token_count", 0) or 0)
+    cached_tokens = int(getattr(meta, "cached_content_token_count", 0) or 0)
+    total_tokens = int(getattr(meta, "total_token_count", 0) or 0)
+
+    # Google documents total_token_count as prompt + candidates + tool_use +
+    # thoughts. If our read of the parts doesn't add up to Google's own
+    # total, something in this extraction is wrong -- surface it loudly
+    # rather than let a silent mismatch produce a wrong displayed cost.
+    computed_total = prompt_tokens + output_tokens + tool_use_tokens + thoughts_tokens
+    if total_tokens and computed_total != total_tokens:
+        logger.warning(
+            "Token accounting mismatch: parts sum to %d but Google reports total_token_count=%d "
+            "(prompt=%d, output=%d, thoughts=%d, tool_use=%d)",
+            computed_total, total_tokens, prompt_tokens, output_tokens, thoughts_tokens, tool_use_tokens,
+        )
+
+    if thoughts_tokens:
+        logger.info("Reasoning/thinking tokens present: %d (billed as output tokens)", thoughts_tokens)
+
     return UsageInfo(
-        prompt_tokens=int(getattr(meta, "prompt_token_count", 0) or 0),
-        output_tokens=int(getattr(meta, "candidates_token_count", 0) or 0),
-        total_tokens=int(getattr(meta, "total_token_count", 0) or 0),
+        prompt_tokens=prompt_tokens,
+        output_tokens=output_tokens,
+        thoughts_tokens=thoughts_tokens,
+        tool_use_prompt_tokens=tool_use_tokens,
+        cached_tokens=cached_tokens,
+        total_tokens=total_tokens,
         prompt_modality_breakdown=_modality_breakdown(getattr(meta, "prompt_tokens_details", None)),
         output_modality_breakdown=_modality_breakdown(getattr(meta, "candidates_tokens_details", None)),
     )

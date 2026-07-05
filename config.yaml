@@ -320,8 +320,16 @@ capabilities:
       - Content must be factually accurate and age-appropriate for the target audience.
 
   audio_generate:
+    # Two input modes (chosen in the UI), same pattern as
+    # audio_question_generation:
+    #   topic:  a short brief. Gemini writes the actual narration script
+    #           first (content_instruction below), then narrates that.
+    #   script: the user pastes the exact final script -- narrated verbatim,
+    #           no content-generation step.
     model: gemini-2.5-flash-preview-tts
     available_models: [gemini-2.5-flash-preview-tts, gemini-2.5-pro-preview-tts]
+    text_model: gemini-2.5-flash
+    available_text_models: [gemini-2.5-flash, gemini-2.5-pro]
     voice_preset: Kore
     available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
     sample_rate_hz: 24000
@@ -336,6 +344,21 @@ capabilities:
     speeds: [Slow, Normal, Fast]
     tones: [Neutral, Formal, Friendly, Serious, Enthusiastic]
     lengths: ["Short (~30s)", "Medium (~1-2 min)", "Long (~3-5 min)"]
+    length_word_counts:
+      "Short (~30s)": 75
+      "Medium (~1-2 min)": 200
+      "Long (~3-5 min)": 500
+    content_instruction: |
+      Write a clear, factually accurate narration script of about
+      {word_count} words, suitable for reading aloud as an educational
+      explanation.
+
+      {common_block}
+
+      Topic / brief: {free_text}
+
+      Write only the narration script text. No title, no headers, no stage
+      directions, no markdown formatting.
     prompt_template: |
       Narrate the following content in a {tone} tone, at a {speed} pace, with
       a {accent} accent. Target length: {length}.
@@ -348,6 +371,14 @@ capabilities:
   video_generate:
     model: veo-3.1-generate-preview
     available_models: [veo-3.1-generate-preview, veo-3.1-fast-generate-preview, veo-3.1-lite-generate-preview]
+    # Veo has historically had narrower regional availability than the
+    # text/image/audio models. "global" (used everywhere else in this app)
+    # returned 404 NOT_FOUND for every Veo tier on this project -- pinning
+    # video generation to a specific region as a first thing to try.
+    # If this still 404s, check Vertex AI -> Model Garden for Veo access
+    # on this project; it may need a separate allowlist request entirely.
+    location: us-central1
+    available_locations: [us-central1, us-east4, europe-west4, global]
     resolution: "720p"
     available_resolutions: ["720p", "1080p"]
     output_format: mp4   # the only format Veo returns -- no conversion needed

@@ -106,7 +106,10 @@ def _render_cost(metadata: dict | None) -> None:
     if calls and prompt_tok == 0 and output_tok == 0:
         st.caption("⚠ No usage data returned by the API — cost could not be estimated for this call.")
 
+    thoughts_tok = cost.get("total_thoughts_tokens", 0)
     label = f"Cost — est. ${total:.6f} ({prompt_tok:,} in / {output_tok:,} out tokens)"
+    if thoughts_tok:
+        label += f", {thoughts_tok:,} reasoning tokens"
     with st.expander(label, expanded=False):
         if cost.get("any_unverified"):
             st.warning("Some rates below are unverified against an official Google source.")
@@ -119,6 +122,15 @@ def _render_cost(metadata: dict | None) -> None:
             cols[1].metric("Output tokens", f"{tok.get('output', 0):,}")
             cols[2].metric("Input cost", f"${call.get('input_usd', 0.0):.6f}")
             cols[3].metric("Output cost", f"${call.get('output_usd', 0.0):.6f}")
+            if tok.get("thoughts") or tok.get("tool_use") or tok.get("cached"):
+                extras = []
+                if tok.get("thoughts"):
+                    extras.append(f"{tok['thoughts']:,} reasoning tokens (billed with output)")
+                if tok.get("tool_use"):
+                    extras.append(f"{tok['tool_use']:,} tool-use tokens (billed with input)")
+                if tok.get("cached"):
+                    extras.append(f"{tok['cached']:,} cached tokens")
+                st.caption("Also: " + " · ".join(extras))
             for note in call.get("notes", []):
                 st.caption(f"ℹ {note}")
             st.divider()
@@ -611,6 +623,14 @@ def _generate_audio_tab() -> None:
     s = load_config().capability("audio_generate")
     common = _common_attributes_form("ga")
 
+    mode_label = st.radio(
+        "Input type",
+        ["Topic (Gemini writes the narration)", "My own script (narrated verbatim)"],
+        key="ga-mode",
+        horizontal=True,
+    )
+    mode = "topic" if mode_label.startswith("Topic") else "script"
+
     cols = st.columns(2)
     speaker_mode = cols[0].selectbox("Speakers", s["speaker_modes"], key="ga-speakers")
     multi_speaker = speaker_mode == "Multiple speakers"
@@ -623,23 +643,34 @@ def _generate_audio_tab() -> None:
     length = st.selectbox("Length", s["lengths"], key="ga-length")
 
     free_text = st.text_area(
-        "Content to narrate",
+        "Topic / brief" if mode == "topic" else "Script (narrated exactly as written)",
         height=130,
-        placeholder="e.g. Explain the water cycle in three stages: evaporation, condensation, precipitation.",
+        placeholder=(
+            "e.g. Explain the water cycle in three stages: evaporation, condensation, precipitation."
+            if mode == "topic"
+            else "Paste the exact final script here…"
+        ),
         key="ga-freetext",
     )
 
     with st.expander("Advanced options", expanded=False):
-        cols3 = st.columns(3)
+        cols3 = st.columns(2)
+        text_models = s.get("available_text_models") or [s.get("text_model", s["model"])]
+        text_model = cols3[0].selectbox(
+            "Narration writer model", text_models, index=_idx(text_models, s.get("text_model")),
+            key="ga-textmodel", disabled=(mode == "script"),
+        )
         models = s.get("available_models") or [s["model"]]
-        model = cols3[0].selectbox("Model", models, index=_idx(models, s["model"]), key="ga-model")
+        model = cols3[1].selectbox("TTS model", models, index=_idx(models, s["model"]), key="ga-model")
+
+        cols4 = st.columns(2)
         voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
-        voice = cols3[1].selectbox(
+        voice = cols4[0].selectbox(
             "Voice (single-speaker only)", voices, index=_idx(voices, s.get("voice_preset")),
             key="ga-voice", disabled=multi_speaker,
         )
         formats = s.get("available_formats") or [s.get("output_format", "wav")]
-        output_format = cols3[2].selectbox(
+        output_format = cols4[1].selectbox(
             "Format (for CAE compatibility)", formats, index=_idx(formats, s.get("output_format")), key="ga-fmt"
         )
 
@@ -647,7 +678,7 @@ def _generate_audio_tab() -> None:
         errors = validate_common_attributes(common) + validate_free_text(free_text)
         if not _show_validation_errors(errors):
             return
-        logger.info("Generate Audio: clicked (multi_speaker=%s, accent=%s)", multi_speaker, accent)
+        logger.info("Generate Audio: clicked (mode=%s, multi_speaker=%s, accent=%s)", mode, multi_speaker, accent)
         try:
             with st.spinner("Generating…"):
                 cap = AudioGenerate()
@@ -655,6 +686,7 @@ def _generate_audio_tab() -> None:
                     CapabilityInput(
                         text=free_text,
                         params={
+                            "mode": mode,
                             "assessment_outcome": common.assessment_outcome,
                             "difficulty_level": common.difficulty_level,
                             "target_audience": common.target_audience,
@@ -665,6 +697,7 @@ def _generate_audio_tab() -> None:
                             "tone": tone,
                             "length": length,
                             "model": model,
+                            "text_model": text_model,
                             "voice": voice,
                             "output_format": output_format,
                         },
@@ -679,7 +712,10 @@ def _generate_audio_tab() -> None:
                 )
             if result.metadata.get("format_note"):
                 st.caption(f"ℹ {result.metadata['format_note']}")
-            with st.expander("Prompt sent to Gemini"):
+            if result.metadata.get("mode") == "topic":
+                with st.expander("Narration script Gemini wrote"):
+                    st.write(result.metadata.get("narration_content", ""))
+            with st.expander("Full prompt sent to TTS"):
                 st.text(result.text or "")
             _render_cost(result.metadata)
         except Exception as exc:  # noqa: BLE001
@@ -719,6 +755,11 @@ def _generate_video_tab() -> None:
     with st.expander("Advanced options", expanded=False):
         models = s.get("available_models") or [s["model"]]
         model = st.selectbox("Model", models, index=_idx(models, s["model"]), key="gv-model")
+        locations = s.get("available_locations") or [s.get("location", "us-central1")]
+        location = st.selectbox(
+            "Region", locations, index=_idx(locations, s.get("location")), key="gv-location",
+            help="Veo has narrower regional availability than other Gemini models. If generation 404s, try a different region here.",
+        )
         generate_audio = st.checkbox("Generate audio with the video", value=s.get("generate_audio", True), key="gv-audio")
 
     if st.button("Generate", type="primary", key="gv-go"):
@@ -742,6 +783,7 @@ def _generate_video_tab() -> None:
                             "question_type": common.question_type,
                             "video_type": video_type,
                             "model": model,
+                            "location": location,
                             "resolution": resolution,
                             "duration_seconds": int(duration),
                             "generate_audio": generate_audio,

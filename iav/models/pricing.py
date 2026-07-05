@@ -20,6 +20,13 @@ logger = logging.getLogger(__name__)
 class UsageInfo:
     prompt_tokens: int = 0
     output_tokens: int = 0
+    # Reasoning/"thinking" tokens (Gemini 2.5+ thinking models) and tool-use
+    # tokens are separate buckets in Google's own schema, not part of
+    # prompt/candidates -- billed as real tokens, so they must be counted,
+    # not just carried in total_tokens for display.
+    thoughts_tokens: int = 0
+    tool_use_prompt_tokens: int = 0
+    cached_tokens: int = 0
     total_tokens: int = 0
     prompt_modality_breakdown: dict[str, int] = field(default_factory=dict)
     output_modality_breakdown: dict[str, int] = field(default_factory=dict)
@@ -64,6 +71,9 @@ def estimate_cost(
     tokens = {
         "prompt": usage.prompt_tokens if usage else 0,
         "output": usage.output_tokens if usage else 0,
+        "thoughts": usage.thoughts_tokens if usage else 0,
+        "tool_use": usage.tool_use_prompt_tokens if usage else 0,
+        "cached": usage.cached_tokens if usage else 0,
     }
 
     if entry is None:
@@ -126,22 +136,45 @@ def estimate_cost(
         logger.warning("No input rate configured for model '%s'", model)
         notes.append("No input rate found for this model.")
 
+    output_rate_key = None
     if output_images > 0 and "output_image" in entry:
-        output_usd = usage.output_tokens / 1_000_000 * entry["output_image"]
-        breakdown["output_image"] = output_usd
+        output_rate_key = "output_image"
         notes.append("Output cost uses the image rate for the full output token count.")
     elif "output_text" in entry:
-        output_usd = usage.output_tokens / 1_000_000 * entry["output_text"]
-        breakdown["output_text"] = output_usd
+        output_rate_key = "output_text"
     elif "output_audio" in entry:
-        output_usd = usage.output_tokens / 1_000_000 * entry["output_audio"]
-        breakdown["output_audio"] = output_usd
+        output_rate_key = "output_audio"
     elif "output" in entry:
-        output_usd = usage.output_tokens / 1_000_000 * entry["output"]
-        breakdown["output"] = output_usd
+        output_rate_key = "output"
+
+    if output_rate_key:
+        output_rate = entry[output_rate_key]
+        output_usd = usage.output_tokens / 1_000_000 * output_rate
+        breakdown[output_rate_key] = output_usd
+
+        # Reasoning/"thinking" tokens are a separate bucket in Google's
+        # schema but bill at the same output rate -- fold them in rather
+        # than silently drop them from the total, which would undercount
+        # any call to a thinking-capable model.
+        if usage.thoughts_tokens:
+            thinking_usd = usage.thoughts_tokens / 1_000_000 * output_rate
+            output_usd += thinking_usd
+            breakdown["thinking"] = thinking_usd
+            notes.append(f"Includes {usage.thoughts_tokens:,} reasoning/thinking tokens at the output rate.")
     else:
         logger.warning("No output rate configured for model '%s'", model)
         notes.append("No output rate found for this model.")
+
+    # Tool-use tokens (results fed back to the model) bill at the input
+    # rate. Always 0 today since nothing in this app uses function calling,
+    # but captured so a future tool-using call isn't silently undercounted.
+    if usage.tool_use_prompt_tokens:
+        input_rate = entry.get("input") or entry.get("input_text")
+        if input_rate:
+            tool_use_usd = usage.tool_use_prompt_tokens / 1_000_000 * input_rate
+            input_usd += tool_use_usd
+            breakdown["tool_use"] = tool_use_usd
+            notes.append(f"Includes {usage.tool_use_prompt_tokens:,} tool-use tokens at the input rate.")
 
     if not verified:
         notes.append("Rate unverified against an official Google source — confirm in Cloud Billing.")
@@ -229,6 +262,7 @@ def summarize_costs(calls: list[dict[str, Any]], pricing_table: dict[str, Any]) 
     any_unverified = False
     total_prompt_tokens = 0
     total_output_tokens = 0
+    total_thoughts_tokens = 0
 
     for call in calls:
         est = estimate_cost(
@@ -246,6 +280,7 @@ def summarize_costs(calls: list[dict[str, Any]], pricing_table: dict[str, Any]) 
         total_output_usd += est.output_usd
         total_prompt_tokens += est.tokens.get("prompt", 0)
         total_output_tokens += est.tokens.get("output", 0)
+        total_thoughts_tokens += est.tokens.get("thoughts", 0)
         if not est.verified:
             any_unverified = True
 
@@ -261,6 +296,7 @@ def summarize_costs(calls: list[dict[str, Any]], pricing_table: dict[str, Any]) 
         "any_unverified": any_unverified,
         "total_prompt_tokens": total_prompt_tokens,
         "total_output_tokens": total_output_tokens,
+        "total_thoughts_tokens": total_thoughts_tokens,
         "calls": entries,
         "pricing_last_verified": (pricing_table or {}).get("last_verified"),
         "pricing_source_url": (pricing_table or {}).get("source_url"),
