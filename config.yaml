@@ -71,6 +71,27 @@ pricing:
       unit: per_second_video
       rate_standard: 0.05
 
+# Azure Speech is used by audio_to_audio for transcription. Credentials
+# (AZURE_SPEECH_KEY, AZURE_SPEECH_REGION) come from env vars only, never
+# from this file. If they're unset, or the SDK isn't installed, that
+# capability falls back to Gemini ASR automatically -- see
+# iav/models/azure_speech_client.py.
+azure_speech:
+  default_language: en-IN
+  available_languages:
+    - en-IN   # English (India)
+    - hi-IN   # Hindi
+    - ta-IN   # Tamil
+    - te-IN   # Telugu
+    - bn-IN   # Bengali
+    - mr-IN   # Marathi
+    - gu-IN   # Gujarati
+    - kn-IN   # Kannada
+    - ml-IN   # Malayalam
+    - pa-IN   # Punjabi
+    - en-US
+    - en-GB
+
 capabilities:
 
   audio_question_generation:
@@ -172,10 +193,16 @@ capabilities:
       sound effects, or any text not in the script.
 
   audio_to_audio:
-    # Hybrid pipeline: ASR (audio in, text out) -> optional cleanup -> TTS.
-    # Original speaker's voice is NOT preserved — output uses the voice preset.
-    asr_model: gemini-2.5-flash
-    available_asr_models: [gemini-2.5-flash]
+    # Two input modes (chosen in the UI):
+    #   upload: raw recording -> Azure Speech transcription (falls back to
+    #           Gemini ASR if Azure isn't configured) -> optional cleanup ->
+    #           TTS -> comprehension questions from the transcript.
+    #   topic:  a topic/scenario brief -> Gemini writes the narration content
+    #           directly -> TTS -> questions. No transcription step.
+    # Exactly 2 Gemini models here: one for TTS, one for everything text
+    # (cleanup, content writing, question generation).
+    question_model: gemini-2.5-flash
+    available_text_models: [gemini-2.5-flash]
     tts_model: gemini-2.5-flash-preview-tts
     available_tts_models: [gemini-2.5-flash-preview-tts]
     voice_preset: Kore
@@ -183,6 +210,14 @@ capabilities:
     output_format: wav
     sample_rate_hz: 24000
     cleanup_transcript: true
+    default_question_count: 5
+    default_question_type: mcq      # mcq | short_answer | conceptual
+    default_level: undergraduate    # school | undergraduate | postgraduate
+    lengths: ["Short (~30s)", "Medium (~1-2 min)", "Long (~3-5 min)"]
+    length_word_counts:
+      "Short (~30s)": 75
+      "Medium (~1-2 min)": 200
+      "Long (~3-5 min)": 500
     transcribe_instruction: |
       Transcribe this audio verbatim. Output only the spoken words with
       standard punctuation. Do not add commentary, speaker labels, or
@@ -195,6 +230,41 @@ capabilities:
       - Do not paraphrase, summarise, or change the meaning of any sentence.
       - Do not add any content that is not in the transcript.
       Return ONLY the cleaned transcript, with no commentary or preamble.
+    content_instruction: |
+      Write a clear, factually accurate narration script of about
+      {word_count} words on the following topic/scenario, suitable for
+      reading aloud as an educational explanation.
+
+      Topic / scenario: {free_text}
+
+      Write only the narration script text. No title, no headers, no stage
+      directions, no markdown formatting.
+    questions_instruction: |
+      You are an experienced subject-matter expert generating exam-quality
+      comprehension questions.
+
+      Based strictly on the script below, generate {count} {question_type}
+      questions at the {level} level. Do not invent facts not in the script.
+
+      Script:
+      """
+      {passage}
+      """
+
+      Return ONLY a JSON object matching this schema:
+      {{
+        "questions": [
+          {{
+            "id": <int>,
+            "type": "<question_type>",
+            "stem": "<the question text>",
+            "options": ["A...", "B...", "C...", "D..."],   // mcq only
+            "answer": "<the correct answer>",
+            "explanation": "<one-sentence rationale>",
+            "difficulty": "easy" | "medium" | "hard"
+          }}
+        ]
+      }}
 
   video_to_questions:
     # Video understanding -> structured question/answer JSON.

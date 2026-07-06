@@ -330,23 +330,6 @@ def _run_text_to_speech(text: str, instruction: str, params: dict):
     return cap.process(CapabilityInput(text=text, instruction=instruction, params=params))
 
 
-def _audio_to_audio_options() -> dict:
-    s = load_config().capability("audio_to_audio")
-    cols = st.columns(3)
-    asr_models = s.get("available_asr_models") or [s["asr_model"]]
-    asr_model = cols[0].selectbox("ASR model", asr_models, index=_idx(asr_models, s["asr_model"]), key="a2a-asr")
-    tts_models = s.get("available_tts_models") or [s["tts_model"]]
-    tts_model = cols[1].selectbox("TTS model", tts_models, index=_idx(tts_models, s["tts_model"]), key="a2a-tts")
-    voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
-    voice = cols[2].selectbox("Voice", voices, index=_idx(voices, s.get("voice_preset")), key="a2a-voice")
-    return {"asr_model": asr_model, "tts_model": tts_model, "voice": voice}
-
-
-def _run_audio_to_audio(saved: Path, instruction: str, params: dict):
-    cap = AudioToAudio()
-    return cap.process(CapabilityInput(file_path=saved, instruction=instruction, params=params))
-
-
 def _render_audio_output(result) -> None:  # type: ignore[no-untyped-def]
     st.success("Done.")
     if result.file_path:
@@ -359,12 +342,6 @@ def _render_audio_output(result) -> None:  # type: ignore[no-untyped-def]
                 file_name=result.file_path.name,
                 mime=mime,
             )
-        if result.metadata and result.metadata.get("raw_transcript"):
-            with st.expander("Transcript"):
-                st.text(result.metadata["raw_transcript"])
-            if result.metadata.get("cleaned_script") and result.metadata["cleaned_script"] != result.metadata["raw_transcript"]:
-                with st.expander("Cleaned script used for TTS"):
-                    st.text(result.metadata["cleaned_script"])
     _render_cost(result.metadata)
 
 
@@ -471,6 +448,158 @@ def _render_video_output(result) -> None:  # type: ignore[no-untyped-def]
         with st.expander("SRT captions"):
             st.code(result.text, language="text")
     _render_cost(result.metadata)
+
+
+def _audio_to_audio_tab() -> None:
+    """Recording -> transcript -> re-narrated audio, or a topic -> narration.
+
+    Either way, ends with comprehension questions generated from the script.
+    """
+    st.subheader("Audio → Audio")
+    st.caption(
+        "Upload a recording (transcribed via Azure Speech, multilingual incl. Indian "
+        "languages, falling back to Gemini if Azure isn't configured), or skip straight "
+        "to a topic/scenario. Either way: re-narrated audio plus comprehension questions."
+    )
+
+    s = load_config().capability("audio_to_audio")
+    az = load_config().capabilities.get("azure_speech", {})
+
+    mode_label = st.radio(
+        "Input type",
+        ["Upload recording", "Topic / Scenario"],
+        key="a2a-mode",
+        horizontal=True,
+    )
+    mode = "upload" if mode_label.startswith("Upload") else "topic"
+
+    uploaded = None
+    free_text = None
+    language = None
+    length = None
+
+    if mode == "upload":
+        uploaded = st.file_uploader(
+            "Upload file", type=["mp3", "wav", "m4a", "ogg", "flac"], key="a2a-upload"
+        )
+        languages = az.get("available_languages") or ["en-US"]
+        language = st.selectbox(
+            "Spoken language", languages, index=_idx(languages, az.get("default_language")), key="a2a-lang"
+        )
+    else:
+        free_text = st.text_area(
+            "Topic / scenario",
+            height=130,
+            placeholder="e.g. Explain how a diode works in a simple circuit",
+            key="a2a-freetext",
+        )
+        lengths = s.get("lengths") or ["Short (~30s)"]
+        length = st.selectbox("Length", lengths, key="a2a-length")
+
+    cols = st.columns(3)
+    count = cols[0].number_input(
+        "Number of questions", min_value=1, max_value=20, value=int(s.get("default_question_count", 5)), key="a2a-count"
+    )
+    qtype = cols[1].selectbox("Question type", ["mcq", "short_answer", "conceptual"], key="a2a-qtype")
+    level = cols[2].selectbox(
+        "Level", ["school", "undergraduate", "postgraduate"], index=1, key="a2a-level"
+    )
+
+    with st.expander("Advanced options", expanded=False):
+        cols2 = st.columns(2)
+        text_models = s.get("available_text_models") or [s["question_model"]]
+        question_model = cols2[0].selectbox(
+            "Question / cleanup model", text_models, index=_idx(text_models, s["question_model"]), key="a2a-qmodel"
+        )
+        tts_models = s.get("available_tts_models") or [s["tts_model"]]
+        tts_model = cols2[1].selectbox("TTS model", tts_models, index=_idx(tts_models, s["tts_model"]), key="a2a-ttsmodel")
+        voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
+        voice = st.selectbox("Voice", voices, index=_idx(voices, s.get("voice_preset")), key="a2a-voice")
+
+    if st.button("Process", type="primary", key="a2a-go"):
+        if mode == "upload" and uploaded is None:
+            st.warning("Upload a file first.")
+            return
+        if mode == "topic" and not (free_text or "").strip():
+            st.warning("Enter a topic or scenario first.")
+            return
+
+        logger.info("Audio -> Audio: Process clicked (mode=%s)", mode)
+        try:
+            with st.spinner("Working…"):
+                start = time.perf_counter()
+                cap = AudioToAudio()
+                base_params = {
+                    "mode": mode,
+                    "question_model": question_model,
+                    "tts_model": tts_model,
+                    "voice": voice,
+                    "count": int(count),
+                    "type": qtype,
+                    "level": level,
+                }
+                if mode == "upload":
+                    suffix = Path(uploaded.name).suffix or ""
+                    saved = save_input(uploaded.getvalue(), suffix)
+                    result = cap.process(
+                        CapabilityInput(file_path=saved, params={**base_params, "language": language})
+                    )
+                else:
+                    result = cap.process(
+                        CapabilityInput(text=free_text, params={**base_params, "length": length})
+                    )
+                elapsed = time.perf_counter() - start
+            _render_time_taken(elapsed)
+            _render_audio_to_audio_output(result)
+        except NotImplementedError as exc:
+            logger.warning("Audio -> Audio: not yet implemented: %s", exc)
+            st.info(f"Not yet implemented: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Audio -> Audio: Process failed")
+            st.error(f"Failed: {exc}")
+            with st.expander("Traceback"):
+                st.code(traceback.format_exc())
+
+
+def _render_audio_to_audio_output(result) -> None:  # type: ignore[no-untyped-def]
+    meta = result.metadata or {}
+    st.success("Done.")
+    if meta.get("duration_seconds"):
+        st.metric("Audio duration", f"{meta['duration_seconds']:.1f}s")
+    if result.file_path:
+        st.audio(str(result.file_path))
+        with result.file_path.open("rb") as fh:
+            st.download_button(
+                "Download audio",
+                data=fh.read(),
+                file_name=result.file_path.name,
+                mime=meta.get("mime_type", "audio/wav"),
+            )
+    if meta.get("asr_engine"):
+        st.caption(f"Transcribed via: {meta['asr_engine']}")
+        if "fallback" in meta["asr_engine"]:
+            st.caption("ℹ Azure Speech was unavailable for this run — used the Gemini ASR fallback.")
+    if meta.get("raw_transcript"):
+        with st.expander("Transcript"):
+            st.text(meta["raw_transcript"])
+        if meta.get("cleaned_script") and meta["cleaned_script"] != meta["raw_transcript"]:
+            with st.expander("Script used for narration"):
+                st.text(meta["cleaned_script"])
+    elif result.text:
+        with st.expander("Script used for narration"):
+            st.text(result.text)
+    if result.data:
+        with st.expander(f"Questions ({meta.get('question_count', '?')})"):
+            st.json(result.data)
+        q_path = meta.get("questions_json_path")
+        if q_path and Path(q_path).exists():
+            with Path(q_path).open("rb") as fh:
+                st.download_button(
+                    "Download questions JSON", data=fh.read(), file_name=Path(q_path).name, mime="application/json"
+                )
+    if meta.get("asr_engine", "").startswith("Azure"):
+        st.caption("ℹ Azure Speech transcription is billed separately by Azure — not included in the cost estimate below.")
+    _render_cost(meta)
 
 
 def _audio_questions_tab() -> None:
@@ -907,19 +1036,7 @@ with transform_tabs[1]:
     )
 
 with transform_tabs[2]:
-    _capability_tab(
-        title="Audio → Audio",
-        description=(
-            "Upload a raw recording. Transcribed and re-spoken in the chosen "
-            "voice preset (original speaker's voice is not preserved)."
-        ),
-        accept_types=["mp3", "wav", "m4a", "ogg", "flac"],
-        default_instruction="",
-        run=_run_audio_to_audio,
-        output_renderer=_render_audio_output,
-        options_renderer=_audio_to_audio_options,
-        options_label="Models & voice",
-    )
+    _audio_to_audio_tab()
 
 with transform_tabs[3]:
     _capability_tab(
