@@ -52,6 +52,10 @@ st.set_page_config(
 # for when it's ready to demo.
 SHOW_GENERATE_VIDEO = False
 
+# Video -> Questions / Video -> Professional hidden from Transform Existing
+# Content for now -- capability code stays intact for when it's ready to demo.
+SHOW_VIDEO_TRANSFORM_TABS = False
+
 
 # ----------------------------------------------------------------------
 # Shared UI primitives
@@ -1037,16 +1041,18 @@ _show_session_cost()
 st.header("Transform Existing Content")
 st.caption("Enhance or analyse material the SME already produced — a sketch, a recording, a video.")
 
-transform_tabs = st.tabs([
-    "Image",
-    "Text → Audio",
-    "Audio → Audio",
-    "Video → Questions",
-    "Video → Professional",
-    "Audio → Questions",
-])
+transform_titles = ["Image", "Text → Audio", "Audio → Audio"]
+if SHOW_VIDEO_TRANSFORM_TABS:
+    transform_titles += ["Video → Questions", "Video → Professional"]
+transform_titles.append("Audio → Questions")
+transform_tabs = st.tabs(transform_titles)
 
-with transform_tabs[0]:
+
+def _transform_tab(title: str):
+    return transform_tabs[transform_titles.index(title)]
+
+
+with _transform_tab("Image"):
     _capability_tab(
         title="Image — hand-drawn diagram → professional render",
         description=(
@@ -1065,7 +1071,7 @@ with transform_tabs[0]:
         options_label="Model & resolution",
     )
 
-with transform_tabs[1]:
+with _transform_tab("Text → Audio"):
     _capability_tab(
         title="Text → Audio",
         description="Paste a script. Get studio-quality narration in the chosen voice preset.",
@@ -1080,40 +1086,41 @@ with transform_tabs[1]:
         options_label="Model & voice",
     )
 
-with transform_tabs[2]:
+with _transform_tab("Audio → Audio"):
     _audio_to_audio_tab()
 
-with transform_tabs[3]:
-    _capability_tab(
-        title="Video → Questions",
-        description="Upload a lecture/explainer video. Get draft questions + answer key.",
-        accept_types=["mp4", "mov", "webm", "mkv"],
-        default_instruction=(
-            "Generate 5 multiple-choice questions at the undergraduate level "
-            "based strictly on this video's content."
-        ),
-        run=_run_video_questions,
-        output_renderer=_render_questions_output,
-        options_renderer=_video_questions_options,
-        options_label="Question settings",
-    )
+if SHOW_VIDEO_TRANSFORM_TABS:
+    with _transform_tab("Video → Questions"):
+        _capability_tab(
+            title="Video → Questions",
+            description="Upload a lecture/explainer video. Get draft questions + answer key.",
+            accept_types=["mp4", "mov", "webm", "mkv"],
+            default_instruction=(
+                "Generate 5 multiple-choice questions at the undergraduate level "
+                "based strictly on this video's content."
+            ),
+            run=_run_video_questions,
+            output_renderer=_render_questions_output,
+            options_renderer=_video_questions_options,
+            options_label="Question settings",
+        )
 
-with transform_tabs[4]:
-    _capability_tab(
-        title="Video → Professional",
-        description=(
-            "Upload an SME tutorial recording. Output: cleaned audio + captions "
-            "+ stabilisation + light colour correction."
-        ),
-        accept_types=["mp4", "mov", "webm", "mkv"],
-        default_instruction="",
-        run=_run_video_enhance,
-        output_renderer=_render_video_output,
-        options_renderer=_video_enhance_options,
-        options_label="Pipeline options",
-    )
+    with _transform_tab("Video → Professional"):
+        _capability_tab(
+            title="Video → Professional",
+            description=(
+                "Upload an SME tutorial recording. Output: cleaned audio + captions "
+                "+ stabilisation + light colour correction."
+            ),
+            accept_types=["mp4", "mov", "webm", "mkv"],
+            default_instruction="",
+            run=_run_video_enhance,
+            output_renderer=_render_video_output,
+            options_renderer=_video_enhance_options,
+            options_label="Pipeline options",
+        )
 
-with transform_tabs[5]:
+with _transform_tab("Audio → Questions"):
     _audio_questions_tab()
 
 st.divider()
