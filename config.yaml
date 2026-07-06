@@ -30,34 +30,12 @@ pricing:
   source_url: "https://cloud.google.com/vertex-ai/generative-ai/pricing"
 
   models:
-    gemini-3.1-flash-image:    # Nano Banana 2 — current project default
-      verified: true
-      unit: per_million_tokens
-      input: 0.50               # combined text/image/video input rate
-      output_text: 3.00
+    gemini-3.1-flash-image:    # Nano Banana 2 — the only image model confirmed
+      verified: true           # working on this Vertex AI project; others
+      unit: per_million_tokens # (Nano Banana Pro, original Nano Banana, Imagen)
+      input: 0.50               # were dropped from available_models below after
+      output_text: 3.00         # testing showed they don't support this project.
       output_image: 60.00
-
-    gemini-3-pro-image:        # Nano Banana Pro
-      verified: true
-      unit: per_million_tokens
-      input: 2.00
-      output_text: 12.00
-      output_image: 120.00
-
-    gemini-2.5-flash-image:    # Nano Banana (original) — not on the official
-      verified: false          # pricing page; input/output_text below per an
-      unit: per_million_tokens # LLM-sourced estimate, output_image still a
-      input: 0.30              # placeholder (no confident figure given for it)
-      output_text: 2.50
-      output_image: 60.00
-
-    imagen-3.0-capability-001:  # billed per-image, not per-token
-      # Rate reported by an LLM query (not an official Google source or
-      # Cloud Billing), so still unverified -- but a real estimate is more
-      # honest than showing $0.00 for an unsupported unit.
-      verified: false
-      unit: per_image
-      rate_per_image: 0.040
 
     gemini-2.5-flash:
       verified: true
@@ -108,9 +86,9 @@ capabilities:
     # the same question schema as video_to_questions. Output questions are
     # TEXT (read on screen), not narrated.
     text_model: gemini-2.5-flash
-    available_text_models: [gemini-2.5-flash, gemini-2.5-pro]
+    available_text_models: [gemini-2.5-flash]
     tts_model: gemini-2.5-flash-preview-tts
-    available_tts_models: [gemini-2.5-flash-preview-tts, gemini-2.5-pro-preview-tts]
+    available_tts_models: [gemini-2.5-flash-preview-tts]
     voice_preset: Kore
     available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
     sample_rate_hz: 24000
@@ -158,7 +136,7 @@ capabilities:
     # Nano Banana 2 — confirmed working on this Vertex AI project.
     # available_models populates the UI's model dropdown; model is the default.
     model: gemini-3.1-flash-image
-    available_models: [gemini-3.1-flash-image, gemini-3-pro-image, gemini-2.5-flash-image, imagen-3.0-capability-001]
+    available_models: [gemini-3.1-flash-image]
     resolution: "2K"
     available_resolutions: ["1K", "2K", "4K"]
     default_instruction: |
@@ -182,7 +160,7 @@ capabilities:
     # Gemini TTS path. Voice preset is a placeholder — needs sign-off from
     # whoever owns the English curriculum before going to real users.
     model: gemini-2.5-flash-preview-tts
-    available_models: [gemini-2.5-flash-preview-tts, gemini-2.5-pro-preview-tts]
+    available_models: [gemini-2.5-flash-preview-tts]
     voice_preset: Kore
     available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
     output_format: wav
@@ -197,9 +175,9 @@ capabilities:
     # Hybrid pipeline: ASR (audio in, text out) -> optional cleanup -> TTS.
     # Original speaker's voice is NOT preserved — output uses the voice preset.
     asr_model: gemini-2.5-flash
-    available_asr_models: [gemini-2.5-flash, gemini-2.5-pro]
+    available_asr_models: [gemini-2.5-flash]
     tts_model: gemini-2.5-flash-preview-tts
-    available_tts_models: [gemini-2.5-flash-preview-tts, gemini-2.5-pro-preview-tts]
+    available_tts_models: [gemini-2.5-flash-preview-tts]
     voice_preset: Kore
     available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
     output_format: wav
@@ -221,7 +199,7 @@ capabilities:
   video_to_questions:
     # Video understanding -> structured question/answer JSON.
     model: gemini-2.5-flash
-    available_models: [gemini-2.5-flash, gemini-2.5-pro, gemini-3.5-flash]
+    available_models: [gemini-2.5-flash]
     default_question_count: 5
     default_question_type: mcq      # mcq | short_answer | conceptual
     default_level: undergraduate    # school | undergraduate | postgraduate
@@ -254,7 +232,7 @@ capabilities:
     # flagging. SME's original voice is preserved — we denoise it, we
     # don't regenerate it as TTS.
     analysis_model: gemini-2.5-flash
-    available_models: [gemini-2.5-flash, gemini-2.5-pro, gemini-3.5-flash]
+    available_models: [gemini-2.5-flash]
     output_format: mp4
     pipeline:
       stabilize: true                # ffmpeg deshake filter
@@ -300,7 +278,7 @@ capabilities:
 
   image_generate:
     model: gemini-3.1-flash-image
-    available_models: [gemini-3.1-flash-image, gemini-3-pro-image, gemini-2.5-flash-image]
+    available_models: [gemini-3.1-flash-image]
     resolution: "2K"
     available_resolutions: ["1K", "2K", "4K"]
     output_format: png
@@ -327,9 +305,9 @@ capabilities:
     #   script: the user pastes the exact final script -- narrated verbatim,
     #           no content-generation step.
     model: gemini-2.5-flash-preview-tts
-    available_models: [gemini-2.5-flash-preview-tts, gemini-2.5-pro-preview-tts]
+    available_models: [gemini-2.5-flash-preview-tts]
     text_model: gemini-2.5-flash
-    available_text_models: [gemini-2.5-flash, gemini-2.5-pro]
+    available_text_models: [gemini-2.5-flash]
     voice_preset: Kore
     available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
     sample_rate_hz: 24000

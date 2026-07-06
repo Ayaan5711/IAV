@@ -14,6 +14,7 @@ from config.yaml's available_* lists.
 from __future__ import annotations
 
 import logging
+import time
 import traceback
 from pathlib import Path
 from typing import Any, Callable
@@ -46,6 +47,11 @@ st.set_page_config(
     layout="wide",
 )
 
+# Veo generation is hidden for now (Preview-only, narrow regional
+# availability, multi-minute latency) -- capability code stays intact
+# for when it's ready to demo.
+SHOW_GENERATE_VIDEO = False
+
 
 # ----------------------------------------------------------------------
 # Shared UI primitives
@@ -74,16 +80,28 @@ def _show_config_status() -> bool:
 
         st.success(f"Vertex AI project: `{cfg.vertex.project_id}`")
         st.caption(f"Location: `{cfg.vertex.location}`")
-        st.caption(f"Credentials: `{cfg.vertex.credentials_path}`")
         return True
+
+
+def _get_inr_rate() -> float:
+    return float(st.session_state.get("usd_to_inr_rate", 0.0) or 0.0)
 
 
 def _show_session_cost() -> None:
     with st.sidebar:
         st.divider()
         st.markdown("### Session cost (estimated)")
+        st.number_input(
+            "USD → INR rate (optional)",
+            min_value=0.0,
+            value=st.session_state.get("usd_to_inr_rate", 0.0),
+            step=0.5,
+            key="usd_to_inr_rate",
+            help="Enter today's rate to also show costs converted to INR. Leave at 0 to show USD only.",
+        )
         total = st.session_state.get("session_cost_usd", 0.0)
-        st.metric("Total this session", f"${total:.6f}")
+        rate = _get_inr_rate()
+        st.metric("Total this session", f"${total:.6f}" + (f" (₹{total * rate:.2f})" if rate else ""))
         st.caption("Token counts are real; dollar amounts are estimates. See Cloud Billing for actual charges.")
         if st.button("Reset session total", key="reset-session-cost"):
             st.session_state["session_cost_usd"] = 0.0
@@ -107,21 +125,27 @@ def _render_cost(metadata: dict | None) -> None:
         st.caption("⚠ No usage data returned by the API — cost could not be estimated for this call.")
 
     thoughts_tok = cost.get("total_thoughts_tokens", 0)
-    label = f"Cost — est. ${total:.6f} ({prompt_tok:,} in / {output_tok:,} out tokens)"
+    inr_rate = _get_inr_rate()
+    inr_suffix = f" (₹{total * inr_rate:.2f})" if inr_rate else ""
+    label = f"Cost — est. ${total:.6f}{inr_suffix} ({prompt_tok:,} in / {output_tok:,} out tokens)"
     if thoughts_tok:
         label += f", {thoughts_tok:,} reasoning tokens"
     with st.expander(label, expanded=False):
         if cost.get("any_unverified"):
             st.warning("Some rates below are unverified against an official Google source.")
+        if inr_rate:
+            st.caption(f"Converted at ₹{inr_rate:.2f} / $1 (rate entered manually in the sidebar).")
         for call in calls:
             badge = "verified" if call.get("verified") else "⚠ unverified"
             st.markdown(f"**{call.get('label', call.get('model'))}** — `{call.get('model')}` — {badge}")
             tok = call.get("tokens", {})
+            input_usd = call.get("input_usd", 0.0)
+            output_usd = call.get("output_usd", 0.0)
             cols = st.columns(4)
             cols[0].metric("Input tokens", f"{tok.get('prompt', 0):,}")
             cols[1].metric("Output tokens", f"{tok.get('output', 0):,}")
-            cols[2].metric("Input cost", f"${call.get('input_usd', 0.0):.6f}")
-            cols[3].metric("Output cost", f"${call.get('output_usd', 0.0):.6f}")
+            cols[2].metric("Input cost", f"${input_usd:.6f}" + (f" / ₹{input_usd * inr_rate:.2f}" if inr_rate else ""))
+            cols[3].metric("Output cost", f"${output_usd:.6f}" + (f" / ₹{output_usd * inr_rate:.2f}" if inr_rate else ""))
             if tok.get("thoughts") or tok.get("tool_use") or tok.get("cached"):
                 extras = []
                 if tok.get("thoughts"):
@@ -138,6 +162,10 @@ def _render_cost(metadata: dict | None) -> None:
         source = cost.get("pricing_source_url")
         if last_verified or source:
             st.caption(f"Pricing last verified {last_verified or 'unknown'} — {source or 'n/a'}")
+
+
+def _render_time_taken(seconds: float) -> None:
+    st.caption(f"⏱ Time taken: {seconds:.1f}s")
 
 
 def _capability_tab(
@@ -201,12 +229,15 @@ def _capability_tab(
         logger.info("Tab '%s': Process clicked", title)
         try:
             with st.spinner("Working…"):
+                start = time.perf_counter()
                 if accept_types is not None:
                     suffix = Path(uploaded.name).suffix or ""
                     saved = save_input(uploaded.getvalue(), suffix)
                     result = run(saved, instruction, params)
                 else:
                     result = run(text_input, instruction, params)
+                elapsed = time.perf_counter() - start
+            _render_time_taken(elapsed)
             output_renderer(result)
         except NotImplementedError as exc:
             logger.warning("Tab '%s': not yet implemented: %s", title, exc)
@@ -221,7 +252,7 @@ def _capability_tab(
 def _common_attributes_form(key_prefix: str) -> CommonAttributes:
     """The four assessment-metadata fields shared by every generate tab."""
     outcome = st.text_input(
-        "Assessment outcome",
+        "Assessment outcome (optional)",
         placeholder="e.g. Apply the Pythagorean theorem to find a missing side",
         key=f"{key_prefix}-outcome",
     )
@@ -494,6 +525,7 @@ def _audio_questions_tab() -> None:
         logger.info("Audio -> Questions: Process clicked (mode=%s)", mode)
         try:
             with st.spinner("Working…"):
+                start = time.perf_counter()
                 cap = AudioQuestionGeneration()
                 result = cap.process(
                     CapabilityInput(
@@ -509,6 +541,8 @@ def _audio_questions_tab() -> None:
                         },
                     )
                 )
+                elapsed = time.perf_counter() - start
+            _render_time_taken(elapsed)
             _render_audio_questions_output(result)
         except NotImplementedError as exc:
             logger.warning("Audio -> Questions: not yet implemented: %s", exc)
@@ -573,7 +607,7 @@ def _generate_image_tab() -> None:
         resolutions = s.get("available_resolutions") or [s.get("resolution", "2K")]
         resolution = cols2[1].selectbox("Resolution", resolutions, index=_idx(resolutions, s.get("resolution")), key="gi-res")
         formats = s.get("available_formats") or [s.get("output_format", "png")]
-        output_format = cols2[2].selectbox("Format (for CAE compatibility)", formats, index=_idx(formats, s.get("output_format")), key="gi-fmt")
+        output_format = cols2[2].selectbox("Output format", formats, index=_idx(formats, s.get("output_format")), key="gi-fmt")
 
     if st.button("Generate", type="primary", key="gi-go"):
         errors = validate_common_attributes(common) + validate_free_text(free_text)
@@ -582,6 +616,7 @@ def _generate_image_tab() -> None:
         logger.info("Generate Image: clicked (visual_type=%s, style=%s)", visual_type, style)
         try:
             with st.spinner("Generating…"):
+                start = time.perf_counter()
                 cap = ImageGenerate()
                 result = cap.process(
                     CapabilityInput(
@@ -599,7 +634,9 @@ def _generate_image_tab() -> None:
                         },
                     )
                 )
+                elapsed = time.perf_counter() - start
             st.success("Done.")
+            _render_time_taken(elapsed)
             st.image(str(result.file_path), caption=result.file_path.name)
             with result.file_path.open("rb") as fh:
                 st.download_button(
@@ -671,7 +708,7 @@ def _generate_audio_tab() -> None:
         )
         formats = s.get("available_formats") or [s.get("output_format", "wav")]
         output_format = cols4[1].selectbox(
-            "Format (for CAE compatibility)", formats, index=_idx(formats, s.get("output_format")), key="ga-fmt"
+            "Output format", formats, index=_idx(formats, s.get("output_format")), key="ga-fmt"
         )
 
     if st.button("Generate", type="primary", key="ga-go"):
@@ -681,6 +718,7 @@ def _generate_audio_tab() -> None:
         logger.info("Generate Audio: clicked (mode=%s, multi_speaker=%s, accent=%s)", mode, multi_speaker, accent)
         try:
             with st.spinner("Generating…"):
+                start = time.perf_counter()
                 cap = AudioGenerate()
                 result = cap.process(
                     CapabilityInput(
@@ -703,7 +741,9 @@ def _generate_audio_tab() -> None:
                         },
                     )
                 )
+                elapsed = time.perf_counter() - start
             st.success("Done.")
+            _render_time_taken(elapsed)
             st.audio(str(result.file_path))
             with result.file_path.open("rb") as fh:
                 st.download_button(
@@ -772,6 +812,7 @@ def _generate_video_tab() -> None:
         )
         try:
             with st.spinner(f"Generating video — this can take a few minutes (Veo, up to {int(s.get('poll_timeout_seconds', 360))}s)…"):
+                start = time.perf_counter()
                 cap = VideoGenerate()
                 result = cap.process(
                     CapabilityInput(
@@ -790,7 +831,9 @@ def _generate_video_tab() -> None:
                         },
                     )
                 )
+                elapsed = time.perf_counter() - start
             st.success("Done.")
+            _render_time_taken(elapsed)
             st.video(str(result.file_path))
             with result.file_path.open("rb") as fh:
                 st.download_button(
@@ -915,11 +958,10 @@ st.divider()
 st.header("Generate New Content")
 st.caption("No source material needed — describe what's wanted via a structured, validated prompt.")
 
-generate_tabs = st.tabs([
-    "Generate Image",
-    "Generate Audio",
-    "Generate Video",
-])
+generate_tab_titles = ["Generate Image", "Generate Audio"]
+if SHOW_GENERATE_VIDEO:
+    generate_tab_titles.append("Generate Video")
+generate_tabs = st.tabs(generate_tab_titles)
 
 with generate_tabs[0]:
     _generate_image_tab()
@@ -927,5 +969,6 @@ with generate_tabs[0]:
 with generate_tabs[1]:
     _generate_audio_tab()
 
-with generate_tabs[2]:
-    _generate_video_tab()
+if SHOW_GENERATE_VIDEO:
+    with generate_tabs[2]:
+        _generate_video_tab()
