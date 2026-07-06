@@ -29,6 +29,7 @@ from iav.capabilities.prompt_schema import (
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
 from iav.models.pricing import summarize_costs
+from iav.models.text_generation import generate_text
 from iav.storage import save_output
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,7 @@ class AudioGenerate(Capability):
 
         tts_model = os.environ.get("GEMINI_TTS_MODEL") or params.get("model") or self._settings["model"]
         text_model = params.get("text_model") or self._settings.get("text_model", tts_model)
+        azure_deployment = self.config.azure_openai.get("default_deployment")
         sample_rate = int(self._settings.get("sample_rate_hz", 24000))
 
         calls: list[dict] = []
@@ -84,11 +86,14 @@ class AudioGenerate(Capability):
             )
             logger.info("audio_generate: writing narration content (target ~%d words)", word_count)
             try:
-                content_result = self.client.generate_text(model=text_model, prompt=content_prompt)
+                content_result = generate_text(
+                    gemini_client=self.client, gemini_model=text_model, prompt=content_prompt,
+                    label="write_narration", azure_deployment=azure_deployment,
+                )
             except GeminiCallError as exc:
                 raise AudioGenerateError(f"Narration content generation failed: {exc}") from exc
-            calls.append({"label": "write_narration", "model": text_model, "usage": content_result.usage})
-            content = (content_result.text or "").strip()
+            calls.append(content_result.call_record)
+            content = content_result.text.strip()
             if not content:
                 raise AudioGenerateError("Model returned no narration content.")
 

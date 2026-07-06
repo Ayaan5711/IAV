@@ -71,6 +71,19 @@ pricing:
       unit: per_second_video
       rate_standard: 0.05
 
+    # Azure OpenAI pricing varies by region/commitment tier and isn't
+    # confirmed against your actual Azure agreement -- these are public
+    # list-price estimates for gpt-4o-mini. Update to match whatever model
+    # your deployment (azure_openai.default_deployment below) actually runs,
+    # and check your Azure portal's pricing page before trusting this for
+    # budget decisions. This key MUST match azure_openai.default_deployment
+    # exactly, since that deployment name is what gets billed against it.
+    gpt-4o-mini:
+      verified: false
+      unit: per_million_tokens
+      input_text: 0.15
+      output_text: 0.60
+
 # Azure Speech is used by audio_to_audio for transcription. Credentials
 # (AZURE_SPEECH_KEY, AZURE_SPEECH_REGION) come from env vars only, never
 # from this file. If they're unset, or the SDK isn't installed, that
@@ -91,6 +104,18 @@ azure_speech:
     - pa-IN   # Punjabi
     - en-US
     - en-GB
+
+# Azure OpenAI is the primary engine for every pure text-generation step
+# (transcript cleanup, narration/passage/content writing, question
+# generation) in audio_generate, audio_question_generation, and
+# audio_to_audio -- Gemini is the automatic fallback if Azure isn't
+# configured or a call fails. Credentials (AZURE_OPENAI_ENDPOINT,
+# AZURE_OPENAI_API_KEY, AZURE_OPENAI_API_VERSION) come from env vars only,
+# never from this file. default_deployment is the exact deployment name
+# from your Azure OpenAI resource -- rename it to match, and update the
+# pricing.models entry with the same key.
+azure_openai:
+  default_deployment: gpt-4o-mini
 
 capabilities:
 

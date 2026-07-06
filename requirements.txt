@@ -9,3 +9,4 @@ ffmpeg-python>=0.2.0
 tenacity>=9.0.0
 python-dotenv>=1.0.1
 azure-cognitiveservices-speech>=1.40.0
+openai>=1.40.0

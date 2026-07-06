@@ -463,7 +463,7 @@ def _audio_to_audio_tab() -> None:
     )
 
     s = load_config().capability("audio_to_audio")
-    az = load_config().capabilities.get("azure_speech", {})
+    az = load_config().azure_speech
 
     mode_label = st.radio(
         "Input type",

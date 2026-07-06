@@ -31,6 +31,7 @@ from iav.models import azure_speech_client
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
 from iav.models.pricing import summarize_costs
+from iav.models.text_generation import generate_text
 from iav.storage import save_output
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ class AudioToAudio(Capability):
         count = int(params.get("count", self._settings.get("default_question_count", 5)))
         qtype = params.get("type") or self._settings.get("default_question_type", "mcq")
         level = params.get("level") or self._settings.get("default_level", "undergraduate")
+        azure_deployment = self.config.azure_openai.get("default_deployment")
 
         calls: list[dict[str, Any]] = []
         raw_transcript: str | None = None
@@ -112,16 +114,17 @@ class AudioToAudio(Capability):
                 cleanup_instruction = self._settings.get("cleanup_instruction", "")
                 logger.info("audio_to_audio: cleaning transcript")
                 try:
-                    cleaned = self.client.generate_text(
-                        model=question_model,
+                    cleaned = generate_text(
+                        gemini_client=self.client, gemini_model=question_model,
                         prompt=f"{cleanup_instruction}\n\nTranscript:\n{transcript}",
+                        label="cleanup", azure_deployment=azure_deployment,
                     )
                 except GeminiCallError:
                     logger.warning("Transcript cleanup failed; using raw transcript")
                     script = transcript
                 else:
-                    calls.append({"label": "cleanup", "model": question_model, "usage": cleaned.usage})
-                    script = (cleaned.text or "").strip() or transcript
+                    calls.append(cleaned.call_record)
+                    script = cleaned.text.strip() or transcript
             else:
                 script = transcript
         else:
@@ -133,11 +136,14 @@ class AudioToAudio(Capability):
             content_prompt = self._settings["content_instruction"].format(word_count=word_count, free_text=raw_text)
             logger.info("audio_to_audio: writing narration content (target ~%d words)", word_count)
             try:
-                content_result = self.client.generate_text(model=question_model, prompt=content_prompt)
+                content_result = generate_text(
+                    gemini_client=self.client, gemini_model=question_model, prompt=content_prompt,
+                    label="write_content", azure_deployment=azure_deployment,
+                )
             except GeminiCallError as exc:
                 raise AudioToAudioError(f"Content generation failed: {exc}") from exc
-            calls.append({"label": "write_content", "model": question_model, "usage": content_result.usage})
-            script = (content_result.text or "").strip()
+            calls.append(content_result.call_record)
+            script = content_result.text.strip()
             if not script:
                 raise AudioToAudioError("Model returned no content.")
 
@@ -169,14 +175,16 @@ class AudioToAudio(Capability):
         )
         logger.info("audio_to_audio: generating questions")
         try:
-            q_result = self.client.generate_text(
-                model=question_model, prompt=q_prompt, response_mime_type="application/json"
+            q_result = generate_text(
+                gemini_client=self.client, gemini_model=question_model, prompt=q_prompt,
+                label="generate_questions", azure_deployment=azure_deployment,
+                response_mime_type="application/json",
             )
         except GeminiCallError as exc:
             raise AudioToAudioError(f"Question generation failed: {exc}") from exc
-        calls.append({"label": "generate_questions", "model": question_model, "usage": q_result.usage})
+        calls.append(q_result.call_record)
 
-        q_raw = (q_result.text or "").strip()
+        q_raw = q_result.text.strip()
         if not q_raw:
             raise AudioToAudioError("Model returned no question text.")
         try:

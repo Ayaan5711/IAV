@@ -26,6 +26,7 @@ from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
 from iav.models.pricing import summarize_costs
+from iav.models.text_generation import generate_text
 from iav.storage import save_output
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ class AudioQuestionGeneration(Capability):
         speed = params.get("speed") or self._settings["speeds"][0]
         tone = params.get("tone") or self._settings["tones"][0]
         multi_speaker = bool(params.get("multi_speaker", False))
+        azure_deployment = self.config.azure_openai.get("default_deployment")
 
         calls: list[dict[str, Any]] = []
 
@@ -80,11 +82,14 @@ class AudioQuestionGeneration(Capability):
             )
             logger.info("audio_question_generation: writing passage on topic/scenario=%r", raw_text)
             try:
-                passage_result = self.client.generate_text(model=text_model, prompt=prompt)
+                passage_result = generate_text(
+                    gemini_client=self.client, gemini_model=text_model, prompt=prompt,
+                    label="write_passage", azure_deployment=azure_deployment,
+                )
             except GeminiCallError as exc:
                 raise AudioQuestionGenerationError(f"Passage generation failed: {exc}") from exc
-            calls.append({"label": "write_passage", "model": text_model, "usage": passage_result.usage})
-            passage = (passage_result.text or "").strip()
+            calls.append(passage_result.call_record)
+            passage = passage_result.text.strip()
             if not passage:
                 raise AudioQuestionGenerationError("Model returned no passage text.")
 
@@ -133,14 +138,16 @@ class AudioQuestionGeneration(Capability):
         )
         logger.info("audio_question_generation: generating questions")
         try:
-            q_result = self.client.generate_text(
-                model=text_model, prompt=q_prompt, response_mime_type="application/json"
+            q_result = generate_text(
+                gemini_client=self.client, gemini_model=text_model, prompt=q_prompt,
+                label="generate_questions", azure_deployment=azure_deployment,
+                response_mime_type="application/json",
             )
         except GeminiCallError as exc:
             raise AudioQuestionGenerationError(f"Question generation failed: {exc}") from exc
-        calls.append({"label": "generate_questions", "model": text_model, "usage": q_result.usage})
+        calls.append(q_result.call_record)
 
-        q_raw = (q_result.text or "").strip()
+        q_raw = q_result.text.strip()
         if not q_raw:
             raise AudioQuestionGenerationError("Model returned no question text.")
         try:
