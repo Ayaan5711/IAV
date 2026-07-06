@@ -73,7 +73,7 @@ def validate_text_field(
 
 def validate_common_attributes(common: CommonAttributes) -> list[str]:
     return validate_text_field(
-        "Assessment outcome", common.assessment_outcome, min_len=3, max_len=MAX_FIELD_LEN
+        "Assessment outcome", common.assessment_outcome, min_len=3, max_len=MAX_FIELD_LEN, required=False
     )
 
 
@@ -85,9 +85,10 @@ def validate_free_text(free_text: str, *, required: bool = True) -> list[str]:
 
 def common_block(common: CommonAttributes) -> str:
     """Renders the shared attributes as a text block for a prompt template."""
-    return (
-        f"Assessment outcome: {common.assessment_outcome}\n"
-        f"Difficulty level: {common.difficulty_level}\n"
-        f"Target audience: {common.target_audience}\n"
-        f"Question type: {common.question_type}"
-    )
+    lines = []
+    if common.assessment_outcome.strip():
+        lines.append(f"Assessment outcome: {common.assessment_outcome}")
+    lines.append(f"Difficulty level: {common.difficulty_level}")
+    lines.append(f"Target audience: {common.target_audience}")
+    lines.append(f"Question type: {common.question_type}")
+    return "\n".join(lines)

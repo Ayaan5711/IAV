@@ -14,6 +14,7 @@ from config.yaml's available_* lists.
 from __future__ import annotations
 
 import logging
+import time
 import traceback
 from pathlib import Path
 from typing import Any, Callable
@@ -46,10 +47,27 @@ st.set_page_config(
     layout="wide",
 )
 
+# Veo generation is hidden for now (Preview-only, narrow regional
+# availability, multi-minute latency) -- capability code stays intact
+# for when it's ready to demo.
+SHOW_GENERATE_VIDEO = False
+
 
 # ----------------------------------------------------------------------
 # Shared UI primitives
 # ----------------------------------------------------------------------
+
+
+_ENGINE_LABELS = {
+    "Auto (Azure primary, Gemini fallback)": "auto",
+    "Gemini only": "gemini",
+    "Azure OpenAI only": "azure",
+}
+
+
+def _engine_selectbox(key: str, *, disabled: bool = False) -> str:
+    choice = st.selectbox("Text-generation engine", list(_ENGINE_LABELS.keys()), key=key, disabled=disabled)
+    return _ENGINE_LABELS[choice]
 
 
 def _idx(options: list | None, value: Any) -> int:
@@ -74,16 +92,28 @@ def _show_config_status() -> bool:
 
         st.success(f"Vertex AI project: `{cfg.vertex.project_id}`")
         st.caption(f"Location: `{cfg.vertex.location}`")
-        st.caption(f"Credentials: `{cfg.vertex.credentials_path}`")
         return True
+
+
+def _get_inr_rate() -> float:
+    return float(st.session_state.get("usd_to_inr_rate", 0.0) or 0.0)
 
 
 def _show_session_cost() -> None:
     with st.sidebar:
         st.divider()
         st.markdown("### Session cost (estimated)")
+        st.number_input(
+            "USD → INR rate (optional)",
+            min_value=0.0,
+            value=st.session_state.get("usd_to_inr_rate", 0.0),
+            step=0.5,
+            key="usd_to_inr_rate",
+            help="Enter today's rate to also show costs converted to INR. Leave at 0 to show USD only.",
+        )
         total = st.session_state.get("session_cost_usd", 0.0)
-        st.metric("Total this session", f"${total:.6f}")
+        rate = _get_inr_rate()
+        st.metric("Total this session", f"${total:.6f}" + (f" (₹{total * rate:.2f})" if rate else ""))
         st.caption("Token counts are real; dollar amounts are estimates. See Cloud Billing for actual charges.")
         if st.button("Reset session total", key="reset-session-cost"):
             st.session_state["session_cost_usd"] = 0.0
@@ -107,21 +137,27 @@ def _render_cost(metadata: dict | None) -> None:
         st.caption("⚠ No usage data returned by the API — cost could not be estimated for this call.")
 
     thoughts_tok = cost.get("total_thoughts_tokens", 0)
-    label = f"Cost — est. ${total:.6f} ({prompt_tok:,} in / {output_tok:,} out tokens)"
+    inr_rate = _get_inr_rate()
+    inr_suffix = f" (₹{total * inr_rate:.2f})" if inr_rate else ""
+    label = f"Cost — est. ${total:.6f}{inr_suffix} ({prompt_tok:,} in / {output_tok:,} out tokens)"
     if thoughts_tok:
         label += f", {thoughts_tok:,} reasoning tokens"
     with st.expander(label, expanded=False):
         if cost.get("any_unverified"):
             st.warning("Some rates below are unverified against an official Google source.")
+        if inr_rate:
+            st.caption(f"Converted at ₹{inr_rate:.2f} / $1 (rate entered manually in the sidebar).")
         for call in calls:
             badge = "verified" if call.get("verified") else "⚠ unverified"
             st.markdown(f"**{call.get('label', call.get('model'))}** — `{call.get('model')}` — {badge}")
             tok = call.get("tokens", {})
+            input_usd = call.get("input_usd", 0.0)
+            output_usd = call.get("output_usd", 0.0)
             cols = st.columns(4)
             cols[0].metric("Input tokens", f"{tok.get('prompt', 0):,}")
             cols[1].metric("Output tokens", f"{tok.get('output', 0):,}")
-            cols[2].metric("Input cost", f"${call.get('input_usd', 0.0):.6f}")
-            cols[3].metric("Output cost", f"${call.get('output_usd', 0.0):.6f}")
+            cols[2].metric("Input cost", f"${input_usd:.6f}" + (f" / ₹{input_usd * inr_rate:.2f}" if inr_rate else ""))
+            cols[3].metric("Output cost", f"${output_usd:.6f}" + (f" / ₹{output_usd * inr_rate:.2f}" if inr_rate else ""))
             if tok.get("thoughts") or tok.get("tool_use") or tok.get("cached"):
                 extras = []
                 if tok.get("thoughts"):
@@ -138,6 +174,10 @@ def _render_cost(metadata: dict | None) -> None:
         source = cost.get("pricing_source_url")
         if last_verified or source:
             st.caption(f"Pricing last verified {last_verified or 'unknown'} — {source or 'n/a'}")
+
+
+def _render_time_taken(seconds: float) -> None:
+    st.caption(f"⏱ Time taken: {seconds:.1f}s")
 
 
 def _capability_tab(
@@ -201,12 +241,15 @@ def _capability_tab(
         logger.info("Tab '%s': Process clicked", title)
         try:
             with st.spinner("Working…"):
+                start = time.perf_counter()
                 if accept_types is not None:
                     suffix = Path(uploaded.name).suffix or ""
                     saved = save_input(uploaded.getvalue(), suffix)
                     result = run(saved, instruction, params)
                 else:
                     result = run(text_input, instruction, params)
+                elapsed = time.perf_counter() - start
+            _render_time_taken(elapsed)
             output_renderer(result)
         except NotImplementedError as exc:
             logger.warning("Tab '%s': not yet implemented: %s", title, exc)
@@ -221,7 +264,7 @@ def _capability_tab(
 def _common_attributes_form(key_prefix: str) -> CommonAttributes:
     """The four assessment-metadata fields shared by every generate tab."""
     outcome = st.text_input(
-        "Assessment outcome",
+        "Assessment outcome (optional)",
         placeholder="e.g. Apply the Pythagorean theorem to find a missing side",
         key=f"{key_prefix}-outcome",
     )
@@ -299,23 +342,6 @@ def _run_text_to_speech(text: str, instruction: str, params: dict):
     return cap.process(CapabilityInput(text=text, instruction=instruction, params=params))
 
 
-def _audio_to_audio_options() -> dict:
-    s = load_config().capability("audio_to_audio")
-    cols = st.columns(3)
-    asr_models = s.get("available_asr_models") or [s["asr_model"]]
-    asr_model = cols[0].selectbox("ASR model", asr_models, index=_idx(asr_models, s["asr_model"]), key="a2a-asr")
-    tts_models = s.get("available_tts_models") or [s["tts_model"]]
-    tts_model = cols[1].selectbox("TTS model", tts_models, index=_idx(tts_models, s["tts_model"]), key="a2a-tts")
-    voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
-    voice = cols[2].selectbox("Voice", voices, index=_idx(voices, s.get("voice_preset")), key="a2a-voice")
-    return {"asr_model": asr_model, "tts_model": tts_model, "voice": voice}
-
-
-def _run_audio_to_audio(saved: Path, instruction: str, params: dict):
-    cap = AudioToAudio()
-    return cap.process(CapabilityInput(file_path=saved, instruction=instruction, params=params))
-
-
 def _render_audio_output(result) -> None:  # type: ignore[no-untyped-def]
     st.success("Done.")
     if result.file_path:
@@ -328,12 +354,6 @@ def _render_audio_output(result) -> None:  # type: ignore[no-untyped-def]
                 file_name=result.file_path.name,
                 mime=mime,
             )
-        if result.metadata and result.metadata.get("raw_transcript"):
-            with st.expander("Transcript"):
-                st.text(result.metadata["raw_transcript"])
-            if result.metadata.get("cleaned_script") and result.metadata["cleaned_script"] != result.metadata["raw_transcript"]:
-                with st.expander("Cleaned script used for TTS"):
-                    st.text(result.metadata["cleaned_script"])
     _render_cost(result.metadata)
 
 
@@ -442,11 +462,166 @@ def _render_video_output(result) -> None:  # type: ignore[no-untyped-def]
     _render_cost(result.metadata)
 
 
+def _audio_to_audio_tab() -> None:
+    """Recording -> transcript -> re-narrated audio, or a topic -> narration.
+
+    Either way, ends with comprehension questions generated from the script.
+    """
+    st.subheader("Audio → Audio")
+    st.caption(
+        "Upload a recording (transcribed via Azure Speech, multilingual incl. Indian "
+        "languages, falling back to Gemini if Azure isn't configured), or skip straight "
+        "to a topic/scenario. Either way: re-narrated audio plus comprehension questions."
+    )
+
+    s = load_config().capability("audio_to_audio")
+    az = load_config().azure_speech
+
+    mode_label = st.radio(
+        "Input type",
+        ["Upload recording", "Topic / Scenario"],
+        key="a2a-mode",
+        horizontal=True,
+    )
+    mode = "upload" if mode_label.startswith("Upload") else "topic"
+
+    uploaded = None
+    free_text = None
+    language = None
+    length = None
+
+    if mode == "upload":
+        uploaded = st.file_uploader(
+            "Upload file", type=["mp3", "wav", "m4a", "ogg", "flac"], key="a2a-upload"
+        )
+        languages = az.get("available_languages") or ["en-US"]
+        language = st.selectbox(
+            "Spoken language", languages, index=_idx(languages, az.get("default_language")), key="a2a-lang"
+        )
+    else:
+        free_text = st.text_area(
+            "Topic / scenario",
+            height=130,
+            placeholder="e.g. Explain how a diode works in a simple circuit",
+            key="a2a-freetext",
+        )
+        lengths = s.get("lengths") or ["Short (~30s)"]
+        length = st.selectbox("Length", lengths, key="a2a-length")
+
+    cols = st.columns(3)
+    count = cols[0].number_input(
+        "Number of questions", min_value=1, max_value=20, value=int(s.get("default_question_count", 5)), key="a2a-count"
+    )
+    qtype = cols[1].selectbox("Question type", ["mcq", "short_answer", "conceptual"], key="a2a-qtype")
+    level = cols[2].selectbox(
+        "Level", ["school", "undergraduate", "postgraduate"], index=1, key="a2a-level"
+    )
+
+    with st.expander("Advanced options", expanded=False):
+        cols2 = st.columns(3)
+        text_models = s.get("available_text_models") or [s["question_model"]]
+        question_model = cols2[0].selectbox(
+            "Question / cleanup model (Gemini fallback)", text_models, index=_idx(text_models, s["question_model"]), key="a2a-qmodel"
+        )
+        tts_models = s.get("available_tts_models") or [s["tts_model"]]
+        tts_model = cols2[1].selectbox("TTS model", tts_models, index=_idx(tts_models, s["tts_model"]), key="a2a-ttsmodel")
+        with cols2[2]:
+            engine = _engine_selectbox("a2a-engine")
+        voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
+        voice = st.selectbox("Voice", voices, index=_idx(voices, s.get("voice_preset")), key="a2a-voice")
+
+    if st.button("Process", type="primary", key="a2a-go"):
+        if mode == "upload" and uploaded is None:
+            st.warning("Upload a file first.")
+            return
+        if mode == "topic" and not (free_text or "").strip():
+            st.warning("Enter a topic or scenario first.")
+            return
+
+        logger.info("Audio -> Audio: Process clicked (mode=%s)", mode)
+        try:
+            with st.spinner("Working…"):
+                start = time.perf_counter()
+                cap = AudioToAudio()
+                base_params = {
+                    "mode": mode,
+                    "question_model": question_model,
+                    "tts_model": tts_model,
+                    "engine": engine,
+                    "voice": voice,
+                    "count": int(count),
+                    "type": qtype,
+                    "level": level,
+                }
+                if mode == "upload":
+                    suffix = Path(uploaded.name).suffix or ""
+                    saved = save_input(uploaded.getvalue(), suffix)
+                    result = cap.process(
+                        CapabilityInput(file_path=saved, params={**base_params, "language": language})
+                    )
+                else:
+                    result = cap.process(
+                        CapabilityInput(text=free_text, params={**base_params, "length": length})
+                    )
+                elapsed = time.perf_counter() - start
+            _render_time_taken(elapsed)
+            _render_audio_to_audio_output(result)
+        except NotImplementedError as exc:
+            logger.warning("Audio -> Audio: not yet implemented: %s", exc)
+            st.info(f"Not yet implemented: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Audio -> Audio: Process failed")
+            st.error(f"Failed: {exc}")
+            with st.expander("Traceback"):
+                st.code(traceback.format_exc())
+
+
+def _render_audio_to_audio_output(result) -> None:  # type: ignore[no-untyped-def]
+    meta = result.metadata or {}
+    st.success("Done.")
+    if meta.get("duration_seconds"):
+        st.metric("Audio duration", f"{meta['duration_seconds']:.1f}s")
+    if result.file_path:
+        st.audio(str(result.file_path))
+        with result.file_path.open("rb") as fh:
+            st.download_button(
+                "Download audio",
+                data=fh.read(),
+                file_name=result.file_path.name,
+                mime=meta.get("mime_type", "audio/wav"),
+            )
+    if meta.get("asr_engine"):
+        st.caption(f"Transcribed via: {meta['asr_engine']}")
+        if "fallback" in meta["asr_engine"]:
+            st.caption("ℹ Azure Speech was unavailable for this run — used the Gemini ASR fallback.")
+    if meta.get("raw_transcript"):
+        with st.expander("Transcript"):
+            st.text(meta["raw_transcript"])
+        if meta.get("cleaned_script") and meta["cleaned_script"] != meta["raw_transcript"]:
+            with st.expander("Script used for narration"):
+                st.text(meta["cleaned_script"])
+    elif result.text:
+        with st.expander("Script used for narration"):
+            st.text(result.text)
+    if result.data:
+        with st.expander(f"Questions ({meta.get('question_count', '?')})"):
+            st.json(result.data)
+        q_path = meta.get("questions_json_path")
+        if q_path and Path(q_path).exists():
+            with Path(q_path).open("rb") as fh:
+                st.download_button(
+                    "Download questions JSON", data=fh.read(), file_name=Path(q_path).name, mime="application/json"
+                )
+    if meta.get("asr_engine", "").startswith("Azure"):
+        st.caption("ℹ Azure Speech transcription is billed separately by Azure — not included in the cost estimate below.")
+    _render_cost(meta)
+
+
 def _audio_questions_tab() -> None:
-    """Topic/passage -> narrated audio + text comprehension questions."""
+    """Topic/scenario/passage -> narrated audio + text comprehension questions."""
     st.subheader("Audio → Questions")
     st.caption(
-        "Give a topic and Gemini writes a passage, or paste your own passage/script. "
+        "Give a topic/scenario and Gemini writes a passage, or paste your own passage/script. "
         "Either way: narrated audio plus text comprehension questions with an answer key."
     )
 
@@ -454,32 +629,51 @@ def _audio_questions_tab() -> None:
 
     mode_label = st.radio(
         "Input type",
-        ["Topic (Gemini writes the passage)", "My own passage/script"],
+        ["Topic / Scenario (Gemini writes the passage)", "My own passage/script"],
         key="aq-mode",
         horizontal=True,
     )
     mode = "topic" if mode_label.startswith("Topic") else "passage"
 
     text_input = st.text_area(
-        "Topic" if mode == "topic" else "Passage / script",
+        "Topic / scenario" if mode == "topic" else "Passage / script",
         height=140,
         placeholder=(
-            "e.g. Photosynthesis" if mode == "topic" else "Paste the full passage or script text here…"
+            "e.g. Photosynthesis, or a scenario like 'A plant growing towards a window'"
+            if mode == "topic" else "Paste the full passage or script text here…"
         ),
         key="aq-text",
     )
 
-    cols = st.columns(3)
-    count = cols[0].number_input("Number of questions", min_value=1, max_value=20, value=5, key="aq-count")
-    qtype = cols[1].selectbox("Question type", ["mcq", "short_answer", "conceptual"], key="aq-type")
-    level = cols[2].selectbox("Level", ["school", "undergraduate", "postgraduate"], index=1, key="aq-level")
+    cols = st.columns(2)
+    speaker_mode = cols[0].selectbox("Speakers", s["speaker_modes"], key="aq-speakers")
+    multi_speaker = speaker_mode == "Multiple speakers"
+    lengths = s.get("lengths") or ["Short (~30s)"]
+    length = cols[1].selectbox("Length", lengths, key="aq-length", disabled=(mode == "passage"))
+
+    cols2 = st.columns(3)
+    count = cols2[0].number_input("Number of questions", min_value=1, max_value=20, value=5, key="aq-count")
+    qtype = cols2[1].selectbox("Question type", ["mcq", "short_answer", "conceptual"], key="aq-type")
+    level = cols2[2].selectbox("Level", ["school", "undergraduate", "postgraduate"], index=1, key="aq-level")
 
     with st.expander("Advanced options", expanded=False):
-        cols2 = st.columns(2)
+        cols3 = st.columns(2)
         text_models = s.get("available_text_models") or [s["text_model"]]
-        text_model = cols2[0].selectbox("Text model", text_models, index=_idx(text_models, s["text_model"]), key="aq-textmodel")
+        text_model = cols3[0].selectbox("Text model", text_models, index=_idx(text_models, s["text_model"]), key="aq-textmodel")
         voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
-        voice = cols2[1].selectbox("Voice", voices, index=_idx(voices, s.get("voice_preset")), key="aq-voice")
+        voice = cols3[1].selectbox(
+            "Voice (single-speaker only)", voices, index=_idx(voices, s.get("voice_preset")),
+            key="aq-voice", disabled=multi_speaker,
+        )
+        cols4 = st.columns(3)
+        accents = s.get("accents") or ["Neutral"]
+        accent = cols4[0].selectbox("Accent", accents, key="aq-accent")
+        speeds = s.get("speeds") or ["Normal"]
+        speed = cols4[1].selectbox("Speed", speeds, key="aq-speed")
+        with cols4[2]:
+            engine = _engine_selectbox("aq-engine")
+        tones = s.get("tones") or ["Neutral"]
+        tone = st.selectbox("Tone", tones, key="aq-tone")
         instruction = st.text_area(
             "Narration instruction (optional — leave blank to use the default)",
             value="",
@@ -489,11 +683,12 @@ def _audio_questions_tab() -> None:
 
     if st.button("Process", type="primary", key="aq-go"):
         if not (text_input or "").strip():
-            st.warning("Enter a topic or a passage first.")
+            st.warning("Enter a topic/scenario or a passage first.")
             return
         logger.info("Audio -> Questions: Process clicked (mode=%s)", mode)
         try:
             with st.spinner("Working…"):
+                start = time.perf_counter()
                 cap = AudioQuestionGeneration()
                 result = cap.process(
                     CapabilityInput(
@@ -505,10 +700,18 @@ def _audio_questions_tab() -> None:
                             "type": qtype,
                             "level": level,
                             "text_model": text_model,
+                            "engine": engine,
                             "voice": voice,
+                            "multi_speaker": multi_speaker,
+                            "accent": accent,
+                            "speed": speed,
+                            "tone": tone,
+                            "length": length,
                         },
                     )
                 )
+                elapsed = time.perf_counter() - start
+            _render_time_taken(elapsed)
             _render_audio_questions_output(result)
         except NotImplementedError as exc:
             logger.warning("Audio -> Questions: not yet implemented: %s", exc)
@@ -523,6 +726,8 @@ def _audio_questions_tab() -> None:
 def _render_audio_questions_output(result) -> None:  # type: ignore[no-untyped-def]
     meta = result.metadata or {}
     st.success(f"Done — generated {meta.get('question_count', '?')} questions.")
+    if meta.get("duration_seconds"):
+        st.metric("Audio duration", f"{meta['duration_seconds']:.1f}s")
     if meta.get("mode") == "topic" and meta.get("passage"):
         with st.expander("Generated passage"):
             st.write(meta["passage"])
@@ -573,7 +778,7 @@ def _generate_image_tab() -> None:
         resolutions = s.get("available_resolutions") or [s.get("resolution", "2K")]
         resolution = cols2[1].selectbox("Resolution", resolutions, index=_idx(resolutions, s.get("resolution")), key="gi-res")
         formats = s.get("available_formats") or [s.get("output_format", "png")]
-        output_format = cols2[2].selectbox("Format (for CAE compatibility)", formats, index=_idx(formats, s.get("output_format")), key="gi-fmt")
+        output_format = cols2[2].selectbox("Output format", formats, index=_idx(formats, s.get("output_format")), key="gi-fmt")
 
     if st.button("Generate", type="primary", key="gi-go"):
         errors = validate_common_attributes(common) + validate_free_text(free_text)
@@ -582,6 +787,7 @@ def _generate_image_tab() -> None:
         logger.info("Generate Image: clicked (visual_type=%s, style=%s)", visual_type, style)
         try:
             with st.spinner("Generating…"):
+                start = time.perf_counter()
                 cap = ImageGenerate()
                 result = cap.process(
                     CapabilityInput(
@@ -599,7 +805,9 @@ def _generate_image_tab() -> None:
                         },
                     )
                 )
+                elapsed = time.perf_counter() - start
             st.success("Done.")
+            _render_time_taken(elapsed)
             st.image(str(result.file_path), caption=result.file_path.name)
             with result.file_path.open("rb") as fh:
                 st.download_button(
@@ -654,14 +862,16 @@ def _generate_audio_tab() -> None:
     )
 
     with st.expander("Advanced options", expanded=False):
-        cols3 = st.columns(2)
+        cols3 = st.columns(3)
         text_models = s.get("available_text_models") or [s.get("text_model", s["model"])]
         text_model = cols3[0].selectbox(
-            "Narration writer model", text_models, index=_idx(text_models, s.get("text_model")),
+            "Narration writer model (Gemini fallback)", text_models, index=_idx(text_models, s.get("text_model")),
             key="ga-textmodel", disabled=(mode == "script"),
         )
         models = s.get("available_models") or [s["model"]]
         model = cols3[1].selectbox("TTS model", models, index=_idx(models, s["model"]), key="ga-model")
+        with cols3[2]:
+            engine = _engine_selectbox("ga-engine", disabled=(mode == "script"))
 
         cols4 = st.columns(2)
         voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
@@ -671,7 +881,7 @@ def _generate_audio_tab() -> None:
         )
         formats = s.get("available_formats") or [s.get("output_format", "wav")]
         output_format = cols4[1].selectbox(
-            "Format (for CAE compatibility)", formats, index=_idx(formats, s.get("output_format")), key="ga-fmt"
+            "Output format", formats, index=_idx(formats, s.get("output_format")), key="ga-fmt"
         )
 
     if st.button("Generate", type="primary", key="ga-go"):
@@ -681,6 +891,7 @@ def _generate_audio_tab() -> None:
         logger.info("Generate Audio: clicked (mode=%s, multi_speaker=%s, accent=%s)", mode, multi_speaker, accent)
         try:
             with st.spinner("Generating…"):
+                start = time.perf_counter()
                 cap = AudioGenerate()
                 result = cap.process(
                     CapabilityInput(
@@ -698,12 +909,15 @@ def _generate_audio_tab() -> None:
                             "length": length,
                             "model": model,
                             "text_model": text_model,
+                            "engine": engine,
                             "voice": voice,
                             "output_format": output_format,
                         },
                     )
                 )
+                elapsed = time.perf_counter() - start
             st.success("Done.")
+            _render_time_taken(elapsed)
             st.audio(str(result.file_path))
             with result.file_path.open("rb") as fh:
                 st.download_button(
@@ -772,6 +986,7 @@ def _generate_video_tab() -> None:
         )
         try:
             with st.spinner(f"Generating video — this can take a few minutes (Veo, up to {int(s.get('poll_timeout_seconds', 360))}s)…"):
+                start = time.perf_counter()
                 cap = VideoGenerate()
                 result = cap.process(
                     CapabilityInput(
@@ -790,7 +1005,9 @@ def _generate_video_tab() -> None:
                         },
                     )
                 )
+                elapsed = time.perf_counter() - start
             st.success("Done.")
+            _render_time_taken(elapsed)
             st.video(str(result.file_path))
             with result.file_path.open("rb") as fh:
                 st.download_button(
@@ -864,19 +1081,7 @@ with transform_tabs[1]:
     )
 
 with transform_tabs[2]:
-    _capability_tab(
-        title="Audio → Audio",
-        description=(
-            "Upload a raw recording. Transcribed and re-spoken in the chosen "
-            "voice preset (original speaker's voice is not preserved)."
-        ),
-        accept_types=["mp3", "wav", "m4a", "ogg", "flac"],
-        default_instruction="",
-        run=_run_audio_to_audio,
-        output_renderer=_render_audio_output,
-        options_renderer=_audio_to_audio_options,
-        options_label="Models & voice",
-    )
+    _audio_to_audio_tab()
 
 with transform_tabs[3]:
     _capability_tab(
@@ -915,11 +1120,10 @@ st.divider()
 st.header("Generate New Content")
 st.caption("No source material needed — describe what's wanted via a structured, validated prompt.")
 
-generate_tabs = st.tabs([
-    "Generate Image",
-    "Generate Audio",
-    "Generate Video",
-])
+generate_tab_titles = ["Generate Image", "Generate Audio"]
+if SHOW_GENERATE_VIDEO:
+    generate_tab_titles.append("Generate Video")
+generate_tabs = st.tabs(generate_tab_titles)
 
 with generate_tabs[0]:
     _generate_image_tab()
@@ -927,5 +1131,6 @@ with generate_tabs[0]:
 with generate_tabs[1]:
     _generate_audio_tab()
 
-with generate_tabs[2]:
-    _generate_video_tab()
+if SHOW_GENERATE_VIDEO:
+    with generate_tabs[2]:
+        _generate_video_tab()

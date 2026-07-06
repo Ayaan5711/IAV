@@ -26,9 +26,12 @@ from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
 from iav.models.pricing import summarize_costs
+from iav.models.text_generation import TextGenerationError, generate_text
 from iav.storage import save_output
 
 logger = logging.getLogger(__name__)
+
+_MULTI_SPEAKER_VOICES = ["Kore", "Puck"]
 
 
 class AudioQuestionGenerationError(RuntimeError):
@@ -47,7 +50,7 @@ class AudioQuestionGeneration(Capability):
         raw_text = (payload.text or "").strip()
         if not raw_text:
             raise ValueError(
-                "AudioQuestionGeneration requires text input (a topic or a passage)."
+                "AudioQuestionGeneration requires text input (a topic/scenario or a passage)."
             )
 
         text_model = os.environ.get("GEMINI_TEXT_MODEL") or self._settings["text_model"]
@@ -60,6 +63,13 @@ class AudioQuestionGeneration(Capability):
         count = int(params.get("count", self._settings.get("default_question_count", 5)))
         qtype = params.get("type") or self._settings.get("default_question_type", "mcq")
         level = params.get("level") or self._settings.get("default_level", "undergraduate")
+        length = params.get("length") or self._settings["lengths"][0]
+        accent = params.get("accent") or self._settings["accents"][0]
+        speed = params.get("speed") or self._settings["speeds"][0]
+        tone = params.get("tone") or self._settings["tones"][0]
+        multi_speaker = bool(params.get("multi_speaker", False))
+        azure_deployment = self.config.azure_openai.get("default_deployment")
+        engine = params.get("engine", "auto")
 
         calls: list[dict[str, Any]] = []
 
@@ -67,30 +77,49 @@ class AudioQuestionGeneration(Capability):
         if mode == "passage":
             passage = raw_text
         else:
-            word_count = int(self._settings.get("passage_word_count", 150))
+            word_count = self._settings.get("length_word_counts", {}).get(length, 150)
             prompt = self._settings["passage_instruction"].format(
                 topic=raw_text, word_count=word_count
             )
-            logger.info("audio_question_generation: writing passage on topic=%r", raw_text)
+            logger.info("audio_question_generation: writing passage on topic/scenario=%r", raw_text)
             try:
-                passage_result = self.client.generate_text(model=text_model, prompt=prompt)
-            except GeminiCallError as exc:
+                passage_result = generate_text(
+                    gemini_client=self.client, gemini_model=text_model, prompt=prompt,
+                    label="write_passage", azure_deployment=azure_deployment, engine=engine,
+                )
+            except (GeminiCallError, TextGenerationError) as exc:
                 raise AudioQuestionGenerationError(f"Passage generation failed: {exc}") from exc
-            calls.append({"label": "write_passage", "model": text_model, "usage": passage_result.usage})
-            passage = (passage_result.text or "").strip()
+            calls.append(passage_result.call_record)
+            passage = passage_result.text.strip()
             if not passage:
                 raise AudioQuestionGenerationError("Model returned no passage text.")
 
         # 2. Narrate the passage ----------------------------------------------
+        narration_prompt = self._settings["narration_instruction"].format(
+            tone=tone, speed=speed, accent=accent, passage=passage
+        )
+        speakers = None
+        if multi_speaker:
+            speakers = [
+                {"speaker": "Speaker1", "voice": _MULTI_SPEAKER_VOICES[0]},
+                {"speaker": "Speaker2", "voice": _MULTI_SPEAKER_VOICES[1]},
+            ]
+            narration_prompt += (
+                "\n\nRender this as a two-speaker dialogue. Label each line "
+                "'Speaker1:' or 'Speaker2:' before narrating it."
+            )
+
         instruction = (payload.instruction or "").strip() or None
         logger.info(
-            "audio_question_generation: synthesising narration, chars=%d", len(passage)
+            "audio_question_generation: synthesising narration, chars=%d, multi_speaker=%s",
+            len(narration_prompt), multi_speaker,
         )
         try:
             tts_result = self.client.synthesize_speech(
                 model=tts_model,
-                script=passage,
-                voice_preset=voice,
+                script=narration_prompt,
+                voice_preset=None if speakers else voice,
+                speakers=speakers,
                 instruction=instruction,
             )
         except GeminiCallError as exc:
@@ -101,6 +130,7 @@ class AudioQuestionGeneration(Capability):
             raise AudioQuestionGenerationError(f"TTS returned no audio. Model said: {note}")
 
         wav_bytes = _wrap_pcm_as_wav(tts_result.audio_bytes, sample_rate=sample_rate)
+        duration_seconds = _pcm_duration_seconds(tts_result.audio_bytes, sample_rate=sample_rate)
         audio_path = save_output(data=wav_bytes, suffix=".wav", capability=self.name)
 
         # 3. Generate questions from the passage -------------------------------
@@ -109,14 +139,16 @@ class AudioQuestionGeneration(Capability):
         )
         logger.info("audio_question_generation: generating questions")
         try:
-            q_result = self.client.generate_text(
-                model=text_model, prompt=q_prompt, response_mime_type="application/json"
+            q_result = generate_text(
+                gemini_client=self.client, gemini_model=text_model, prompt=q_prompt,
+                label="generate_questions", azure_deployment=azure_deployment, engine=engine,
+                response_mime_type="application/json",
             )
-        except GeminiCallError as exc:
+        except (GeminiCallError, TextGenerationError) as exc:
             raise AudioQuestionGenerationError(f"Question generation failed: {exc}") from exc
-        calls.append({"label": "generate_questions", "model": text_model, "usage": q_result.usage})
+        calls.append(q_result.call_record)
 
-        q_raw = (q_result.text or "").strip()
+        q_raw = q_result.text.strip()
         if not q_raw:
             raise AudioQuestionGenerationError("Model returned no question text.")
         try:
@@ -154,6 +186,12 @@ class AudioQuestionGeneration(Capability):
                 "text_model": text_model,
                 "tts_model": tts_model,
                 "voice": voice,
+                "multi_speaker": multi_speaker,
+                "accent": accent,
+                "speed": speed,
+                "tone": tone,
+                "length": length,
+                "duration_seconds": duration_seconds,
                 "question_count": len(questions),
                 "params": {"count": count, "type": qtype, "level": level},
                 "mime_type": "audio/wav",
@@ -176,3 +214,9 @@ def _wrap_pcm_as_wav(
         wav.setframerate(sample_rate)
         wav.writeframes(pcm_bytes)
     return buf.getvalue()
+
+
+def _pcm_duration_seconds(pcm_bytes: bytes, *, sample_rate: int, channels: int = 1, sample_width: int = 2) -> float:
+    if sample_rate <= 0:
+        return 0.0
+    return len(pcm_bytes) / (sample_rate * channels * sample_width)
