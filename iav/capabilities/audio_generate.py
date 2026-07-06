@@ -29,7 +29,7 @@ from iav.capabilities.prompt_schema import (
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
 from iav.models.pricing import summarize_costs
-from iav.models.text_generation import generate_text
+from iav.models.text_generation import TextGenerationError, generate_text
 from iav.storage import save_output
 
 logger = logging.getLogger(__name__)
@@ -73,6 +73,7 @@ class AudioGenerate(Capability):
         tts_model = os.environ.get("GEMINI_TTS_MODEL") or params.get("model") or self._settings["model"]
         text_model = params.get("text_model") or self._settings.get("text_model", tts_model)
         azure_deployment = self.config.azure_openai.get("default_deployment")
+        engine = params.get("engine", "auto")
         sample_rate = int(self._settings.get("sample_rate_hz", 24000))
 
         calls: list[dict] = []
@@ -88,9 +89,9 @@ class AudioGenerate(Capability):
             try:
                 content_result = generate_text(
                     gemini_client=self.client, gemini_model=text_model, prompt=content_prompt,
-                    label="write_narration", azure_deployment=azure_deployment,
+                    label="write_narration", azure_deployment=azure_deployment, engine=engine,
                 )
-            except GeminiCallError as exc:
+            except (GeminiCallError, TextGenerationError) as exc:
                 raise AudioGenerateError(f"Narration content generation failed: {exc}") from exc
             calls.append(content_result.call_record)
             content = content_result.text.strip()

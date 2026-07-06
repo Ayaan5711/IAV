@@ -31,7 +31,7 @@ from iav.models import azure_speech_client
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
 from iav.models.pricing import summarize_costs
-from iav.models.text_generation import generate_text
+from iav.models.text_generation import TextGenerationError, generate_text
 from iav.storage import save_output
 
 logger = logging.getLogger(__name__)
@@ -60,6 +60,7 @@ class AudioToAudio(Capability):
         qtype = params.get("type") or self._settings.get("default_question_type", "mcq")
         level = params.get("level") or self._settings.get("default_level", "undergraduate")
         azure_deployment = self.config.azure_openai.get("default_deployment")
+        engine = params.get("engine", "auto")
 
         calls: list[dict[str, Any]] = []
         raw_transcript: str | None = None
@@ -117,9 +118,9 @@ class AudioToAudio(Capability):
                     cleaned = generate_text(
                         gemini_client=self.client, gemini_model=question_model,
                         prompt=f"{cleanup_instruction}\n\nTranscript:\n{transcript}",
-                        label="cleanup", azure_deployment=azure_deployment,
+                        label="cleanup", azure_deployment=azure_deployment, engine=engine,
                     )
-                except GeminiCallError:
+                except (GeminiCallError, TextGenerationError):
                     logger.warning("Transcript cleanup failed; using raw transcript")
                     script = transcript
                 else:
@@ -138,9 +139,9 @@ class AudioToAudio(Capability):
             try:
                 content_result = generate_text(
                     gemini_client=self.client, gemini_model=question_model, prompt=content_prompt,
-                    label="write_content", azure_deployment=azure_deployment,
+                    label="write_content", azure_deployment=azure_deployment, engine=engine,
                 )
-            except GeminiCallError as exc:
+            except (GeminiCallError, TextGenerationError) as exc:
                 raise AudioToAudioError(f"Content generation failed: {exc}") from exc
             calls.append(content_result.call_record)
             script = content_result.text.strip()
@@ -177,10 +178,10 @@ class AudioToAudio(Capability):
         try:
             q_result = generate_text(
                 gemini_client=self.client, gemini_model=question_model, prompt=q_prompt,
-                label="generate_questions", azure_deployment=azure_deployment,
+                label="generate_questions", azure_deployment=azure_deployment, engine=engine,
                 response_mime_type="application/json",
             )
-        except GeminiCallError as exc:
+        except (GeminiCallError, TextGenerationError) as exc:
             raise AudioToAudioError(f"Question generation failed: {exc}") from exc
         calls.append(q_result.call_record)
 

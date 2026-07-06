@@ -26,7 +26,7 @@ from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
 from iav.models.pricing import summarize_costs
-from iav.models.text_generation import generate_text
+from iav.models.text_generation import TextGenerationError, generate_text
 from iav.storage import save_output
 
 logger = logging.getLogger(__name__)
@@ -69,6 +69,7 @@ class AudioQuestionGeneration(Capability):
         tone = params.get("tone") or self._settings["tones"][0]
         multi_speaker = bool(params.get("multi_speaker", False))
         azure_deployment = self.config.azure_openai.get("default_deployment")
+        engine = params.get("engine", "auto")
 
         calls: list[dict[str, Any]] = []
 
@@ -84,9 +85,9 @@ class AudioQuestionGeneration(Capability):
             try:
                 passage_result = generate_text(
                     gemini_client=self.client, gemini_model=text_model, prompt=prompt,
-                    label="write_passage", azure_deployment=azure_deployment,
+                    label="write_passage", azure_deployment=azure_deployment, engine=engine,
                 )
-            except GeminiCallError as exc:
+            except (GeminiCallError, TextGenerationError) as exc:
                 raise AudioQuestionGenerationError(f"Passage generation failed: {exc}") from exc
             calls.append(passage_result.call_record)
             passage = passage_result.text.strip()
@@ -140,10 +141,10 @@ class AudioQuestionGeneration(Capability):
         try:
             q_result = generate_text(
                 gemini_client=self.client, gemini_model=text_model, prompt=q_prompt,
-                label="generate_questions", azure_deployment=azure_deployment,
+                label="generate_questions", azure_deployment=azure_deployment, engine=engine,
                 response_mime_type="application/json",
             )
-        except GeminiCallError as exc:
+        except (GeminiCallError, TextGenerationError) as exc:
             raise AudioQuestionGenerationError(f"Question generation failed: {exc}") from exc
         calls.append(q_result.call_record)
 

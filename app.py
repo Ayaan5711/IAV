@@ -58,6 +58,18 @@ SHOW_GENERATE_VIDEO = False
 # ----------------------------------------------------------------------
 
 
+_ENGINE_LABELS = {
+    "Auto (Azure primary, Gemini fallback)": "auto",
+    "Gemini only": "gemini",
+    "Azure OpenAI only": "azure",
+}
+
+
+def _engine_selectbox(key: str, *, disabled: bool = False) -> str:
+    choice = st.selectbox("Text-generation engine", list(_ENGINE_LABELS.keys()), key=key, disabled=disabled)
+    return _ENGINE_LABELS[choice]
+
+
 def _idx(options: list | None, value: Any) -> int:
     if not options:
         return 0
@@ -506,13 +518,15 @@ def _audio_to_audio_tab() -> None:
     )
 
     with st.expander("Advanced options", expanded=False):
-        cols2 = st.columns(2)
+        cols2 = st.columns(3)
         text_models = s.get("available_text_models") or [s["question_model"]]
         question_model = cols2[0].selectbox(
-            "Question / cleanup model", text_models, index=_idx(text_models, s["question_model"]), key="a2a-qmodel"
+            "Question / cleanup model (Gemini fallback)", text_models, index=_idx(text_models, s["question_model"]), key="a2a-qmodel"
         )
         tts_models = s.get("available_tts_models") or [s["tts_model"]]
         tts_model = cols2[1].selectbox("TTS model", tts_models, index=_idx(tts_models, s["tts_model"]), key="a2a-ttsmodel")
+        with cols2[2]:
+            engine = _engine_selectbox("a2a-engine")
         voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
         voice = st.selectbox("Voice", voices, index=_idx(voices, s.get("voice_preset")), key="a2a-voice")
 
@@ -533,6 +547,7 @@ def _audio_to_audio_tab() -> None:
                     "mode": mode,
                     "question_model": question_model,
                     "tts_model": tts_model,
+                    "engine": engine,
                     "voice": voice,
                     "count": int(count),
                     "type": qtype,
@@ -650,11 +665,13 @@ def _audio_questions_tab() -> None:
             "Voice (single-speaker only)", voices, index=_idx(voices, s.get("voice_preset")),
             key="aq-voice", disabled=multi_speaker,
         )
-        cols4 = st.columns(2)
+        cols4 = st.columns(3)
         accents = s.get("accents") or ["Neutral"]
         accent = cols4[0].selectbox("Accent", accents, key="aq-accent")
         speeds = s.get("speeds") or ["Normal"]
         speed = cols4[1].selectbox("Speed", speeds, key="aq-speed")
+        with cols4[2]:
+            engine = _engine_selectbox("aq-engine")
         tones = s.get("tones") or ["Neutral"]
         tone = st.selectbox("Tone", tones, key="aq-tone")
         instruction = st.text_area(
@@ -683,6 +700,7 @@ def _audio_questions_tab() -> None:
                             "type": qtype,
                             "level": level,
                             "text_model": text_model,
+                            "engine": engine,
                             "voice": voice,
                             "multi_speaker": multi_speaker,
                             "accent": accent,
@@ -844,14 +862,16 @@ def _generate_audio_tab() -> None:
     )
 
     with st.expander("Advanced options", expanded=False):
-        cols3 = st.columns(2)
+        cols3 = st.columns(3)
         text_models = s.get("available_text_models") or [s.get("text_model", s["model"])]
         text_model = cols3[0].selectbox(
-            "Narration writer model", text_models, index=_idx(text_models, s.get("text_model")),
+            "Narration writer model (Gemini fallback)", text_models, index=_idx(text_models, s.get("text_model")),
             key="ga-textmodel", disabled=(mode == "script"),
         )
         models = s.get("available_models") or [s["model"]]
         model = cols3[1].selectbox("TTS model", models, index=_idx(models, s["model"]), key="ga-model")
+        with cols3[2]:
+            engine = _engine_selectbox("ga-engine", disabled=(mode == "script"))
 
         cols4 = st.columns(2)
         voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
@@ -889,6 +909,7 @@ def _generate_audio_tab() -> None:
                             "length": length,
                             "model": model,
                             "text_model": text_model,
+                            "engine": engine,
                             "voice": voice,
                             "output_format": output_format,
                         },
