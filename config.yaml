@@ -116,16 +116,30 @@ capabilities:
     default_question_count: 5
     default_question_type: mcq      # mcq | short_answer | conceptual
     default_level: undergraduate    # school | undergraduate | postgraduate
-    passage_word_count: 150
+    speaker_modes: [Single speaker, Multiple speakers]
+    accents: [Neutral, US, UK, Indian, Australian]
+    speeds: [Slow, Normal, Fast]
+    tones: [Neutral, Formal, Friendly, Serious, Enthusiastic]
+    lengths: ["Short (~30s)", "Medium (~1-2 min)", "Long (~3-5 min)"]
+    length_word_counts:
+      "Short (~30s)": 75
+      "Medium (~1-2 min)": 200
+      "Long (~3-5 min)": 500
     passage_instruction: |
       Write a clear, factually accurate educational passage of about
-      {word_count} words on the following topic, suitable for reading aloud
-      as a listening-comprehension exercise:
+      {word_count} words on the following topic/scenario, suitable for
+      reading aloud as a listening-comprehension exercise:
 
       "{topic}"
 
       Write only the passage text. No title, no headers, no commentary,
       no markdown formatting.
+    narration_instruction: |
+      Narrate the following content in a {tone} tone, at a {speed} pace,
+      with a {accent} accent.
+
+      Content:
+      {passage}
     questions_instruction: |
       You are an experienced subject-matter expert generating exam-quality
       listening-comprehension questions.

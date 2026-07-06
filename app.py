@@ -603,10 +603,10 @@ def _render_audio_to_audio_output(result) -> None:  # type: ignore[no-untyped-de
 
 
 def _audio_questions_tab() -> None:
-    """Topic/passage -> narrated audio + text comprehension questions."""
+    """Topic/scenario/passage -> narrated audio + text comprehension questions."""
     st.subheader("Audio → Questions")
     st.caption(
-        "Give a topic and Gemini writes a passage, or paste your own passage/script. "
+        "Give a topic/scenario and Gemini writes a passage, or paste your own passage/script. "
         "Either way: narrated audio plus text comprehension questions with an answer key."
     )
 
@@ -614,32 +614,49 @@ def _audio_questions_tab() -> None:
 
     mode_label = st.radio(
         "Input type",
-        ["Topic (Gemini writes the passage)", "My own passage/script"],
+        ["Topic / Scenario (Gemini writes the passage)", "My own passage/script"],
         key="aq-mode",
         horizontal=True,
     )
     mode = "topic" if mode_label.startswith("Topic") else "passage"
 
     text_input = st.text_area(
-        "Topic" if mode == "topic" else "Passage / script",
+        "Topic / scenario" if mode == "topic" else "Passage / script",
         height=140,
         placeholder=(
-            "e.g. Photosynthesis" if mode == "topic" else "Paste the full passage or script text here…"
+            "e.g. Photosynthesis, or a scenario like 'A plant growing towards a window'"
+            if mode == "topic" else "Paste the full passage or script text here…"
         ),
         key="aq-text",
     )
 
-    cols = st.columns(3)
-    count = cols[0].number_input("Number of questions", min_value=1, max_value=20, value=5, key="aq-count")
-    qtype = cols[1].selectbox("Question type", ["mcq", "short_answer", "conceptual"], key="aq-type")
-    level = cols[2].selectbox("Level", ["school", "undergraduate", "postgraduate"], index=1, key="aq-level")
+    cols = st.columns(2)
+    speaker_mode = cols[0].selectbox("Speakers", s["speaker_modes"], key="aq-speakers")
+    multi_speaker = speaker_mode == "Multiple speakers"
+    lengths = s.get("lengths") or ["Short (~30s)"]
+    length = cols[1].selectbox("Length", lengths, key="aq-length", disabled=(mode == "passage"))
+
+    cols2 = st.columns(3)
+    count = cols2[0].number_input("Number of questions", min_value=1, max_value=20, value=5, key="aq-count")
+    qtype = cols2[1].selectbox("Question type", ["mcq", "short_answer", "conceptual"], key="aq-type")
+    level = cols2[2].selectbox("Level", ["school", "undergraduate", "postgraduate"], index=1, key="aq-level")
 
     with st.expander("Advanced options", expanded=False):
-        cols2 = st.columns(2)
+        cols3 = st.columns(2)
         text_models = s.get("available_text_models") or [s["text_model"]]
-        text_model = cols2[0].selectbox("Text model", text_models, index=_idx(text_models, s["text_model"]), key="aq-textmodel")
+        text_model = cols3[0].selectbox("Text model", text_models, index=_idx(text_models, s["text_model"]), key="aq-textmodel")
         voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
-        voice = cols2[1].selectbox("Voice", voices, index=_idx(voices, s.get("voice_preset")), key="aq-voice")
+        voice = cols3[1].selectbox(
+            "Voice (single-speaker only)", voices, index=_idx(voices, s.get("voice_preset")),
+            key="aq-voice", disabled=multi_speaker,
+        )
+        cols4 = st.columns(2)
+        accents = s.get("accents") or ["Neutral"]
+        accent = cols4[0].selectbox("Accent", accents, key="aq-accent")
+        speeds = s.get("speeds") or ["Normal"]
+        speed = cols4[1].selectbox("Speed", speeds, key="aq-speed")
+        tones = s.get("tones") or ["Neutral"]
+        tone = st.selectbox("Tone", tones, key="aq-tone")
         instruction = st.text_area(
             "Narration instruction (optional — leave blank to use the default)",
             value="",
@@ -649,7 +666,7 @@ def _audio_questions_tab() -> None:
 
     if st.button("Process", type="primary", key="aq-go"):
         if not (text_input or "").strip():
-            st.warning("Enter a topic or a passage first.")
+            st.warning("Enter a topic/scenario or a passage first.")
             return
         logger.info("Audio -> Questions: Process clicked (mode=%s)", mode)
         try:
@@ -667,6 +684,11 @@ def _audio_questions_tab() -> None:
                             "level": level,
                             "text_model": text_model,
                             "voice": voice,
+                            "multi_speaker": multi_speaker,
+                            "accent": accent,
+                            "speed": speed,
+                            "tone": tone,
+                            "length": length,
                         },
                     )
                 )
@@ -686,6 +708,8 @@ def _audio_questions_tab() -> None:
 def _render_audio_questions_output(result) -> None:  # type: ignore[no-untyped-def]
     meta = result.metadata or {}
     st.success(f"Done — generated {meta.get('question_count', '?')} questions.")
+    if meta.get("duration_seconds"):
+        st.metric("Audio duration", f"{meta['duration_seconds']:.1f}s")
     if meta.get("mode") == "topic" and meta.get("passage"):
         with st.expander("Generated passage"):
             st.write(meta["passage"])
