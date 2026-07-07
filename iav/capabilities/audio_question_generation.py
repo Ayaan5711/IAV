@@ -17,7 +17,6 @@ from __future__ import annotations
 import io
 import json
 import logging
-import os
 import wave
 from typing import Any
 
@@ -53,12 +52,12 @@ class AudioQuestionGeneration(Capability):
                 "AudioQuestionGeneration requires text input (a topic/scenario or a passage)."
             )
 
-        text_model = os.environ.get("GEMINI_TEXT_MODEL") or self._settings["text_model"]
-        tts_model = os.environ.get("GEMINI_TTS_MODEL") or self._settings["tts_model"]
-        voice = self._settings.get("voice_preset", "Kore")
+        params = payload.params or {}
+        text_model = params.get("text_model") or self._settings["text_model"]
+        tts_model = params.get("tts_model") or self._settings["tts_model"]
+        voice = params.get("voice") or self._settings.get("voice_preset", "Kore")
         sample_rate = int(self._settings.get("sample_rate_hz", 24000))
 
-        params = payload.params or {}
         mode = params.get("mode", "topic")  # "topic" | "passage"
         count = int(params.get("count", self._settings.get("default_question_count", 5)))
         qtype = params.get("type") or self._settings.get("default_question_type", "mcq")

@@ -23,7 +23,6 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
-import os
 import re
 import shutil
 import subprocess
@@ -69,7 +68,7 @@ class VideoEnhance(Capability):
         pipeline = {**self._settings.get("pipeline", {}), **params.get("pipeline", {})}
         encoder = {**self._settings.get("encoder", {}), **params.get("encoder", {})}
         caption_cfg = self._settings.get("captions", {})
-        model = params.get("model") or os.environ.get("GEMINI_VIDEO_MODEL") or self._settings["analysis_model"]
+        model = params.get("model") or self._settings["analysis_model"]
 
         with tempfile.TemporaryDirectory(prefix="iav-video-") as tmp:
             work = Path(tmp)

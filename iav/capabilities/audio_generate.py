@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import io
 import logging
-import os
 import shutil
 import subprocess
 import tempfile
@@ -70,7 +69,7 @@ class AudioGenerate(Capability):
         if errors:
             raise ValueError("; ".join(errors))
 
-        tts_model = os.environ.get("GEMINI_TTS_MODEL") or params.get("model") or self._settings["model"]
+        tts_model = params.get("model") or self._settings["model"]
         text_model = params.get("text_model") or self._settings.get("text_model", tts_model)
         azure_deployment = self.config.azure_openai.get("default_deployment")
         engine = params.get("engine", "auto")

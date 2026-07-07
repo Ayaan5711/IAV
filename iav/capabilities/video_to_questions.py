@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
-import os
 from pathlib import Path
 
 from iav.capabilities._json_utils import JsonParseError, parse_json_loose, questions_as_markdown
@@ -48,9 +47,8 @@ class VideoToQuestions(Capability):
 
         video_bytes = source.read_bytes()
         mime_type = _guess_video_mime(source)
-        model = os.environ.get("GEMINI_VIDEO_MODEL") or self._settings["model"]
-
         params = payload.params or {}
+        model = params.get("model") or self._settings["model"]
         count = int(params.get("count", self._settings.get("default_question_count", 5)))
         qtype = params.get("type") or self._settings.get("default_question_type", "mcq")
         level = params.get("level") or self._settings.get("default_level", "undergraduate")

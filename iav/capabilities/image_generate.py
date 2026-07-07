@@ -8,7 +8,6 @@ assembled into one prompt, sent straight to Nano Banana with no input image.
 from __future__ import annotations
 
 import logging
-import os
 
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
 from iav.capabilities.prompt_schema import (
@@ -53,7 +52,7 @@ class ImageGenerate(Capability):
         if errors:
             raise ValueError("; ".join(errors))
 
-        model = params.get("model") or os.environ.get("GEMINI_IMAGE_MODEL") or self._settings["model"]
+        model = params.get("model") or self._settings["model"]
         resolution = params.get("resolution") or self._settings.get("resolution")
         output_format = params.get("output_format") or self._settings.get("output_format")
         prompt = self._settings["prompt_template"].format(

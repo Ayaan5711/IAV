@@ -2,6 +2,11 @@
 
 Reads ``config.yaml`` from the repo root and resolves Vertex AI project /
 location from the service account JSON when not pinned in config.
+
+Secrets (service account path, Azure keys/endpoint) never live in
+config.yaml -- it's tracked in git. They come from environment variables,
+loaded here from a gitignored .env file if one exists, so there's still
+just one file to edit locally for them.
 """
 
 from __future__ import annotations
@@ -15,12 +20,15 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_CONFIG = _REPO_ROOT / "config.yaml"
 _DEFAULT_CREDS = _REPO_ROOT / ".credentials" / "service-account.json"
+
+load_dotenv(_REPO_ROOT / ".env")
 
 
 @dataclass
