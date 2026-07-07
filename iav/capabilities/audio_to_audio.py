@@ -89,13 +89,13 @@ class AudioToAudio(Capability):
             language = params.get("language") or self.config.languages.get("default_input_locale", "en-US")
 
             transcript = None
-            if azure_speech.is_configured():
+            if azure_speech_client.is_configured():
                 logger.info("audio_to_audio: transcribing via Azure Speech (language=%s)", language)
                 try:
-                    azure_result = azure_speech.transcribe_file(source, language=language)
+                    azure_result = azure_speech_client.transcribe_file(source, language=language)
                     transcript = azure_result.text
                     asr_engine = f"Azure Speech ({language})"
-                except azure_speech.AzureSpeechUnavailable as exc:
+                except azure_speech_client.AzureSpeechUnavailable as exc:
                     logger.warning("Azure Speech transcription failed, falling back to Gemini ASR: %s", exc)
             else:
                 logger.info("audio_to_audio: Azure Speech not configured, using Gemini ASR")
