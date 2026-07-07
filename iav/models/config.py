@@ -43,7 +43,7 @@ class Config:
     retry: RetryConfig
     capabilities: dict[str, dict[str, Any]] = field(default_factory=dict)
     pricing: dict[str, Any] = field(default_factory=dict)
-    azure_speech: dict[str, Any] = field(default_factory=dict)
+    languages: dict[str, Any] = field(default_factory=dict)
     azure_openai: dict[str, Any] = field(default_factory=dict)
     log_level: str = "INFO"
 
@@ -162,7 +162,7 @@ def load_config(path: Path | None = None) -> Config:
         retry=retry,
         capabilities=raw.get("capabilities", {}) or {},
         pricing=raw.get("pricing", {}) or {},
-        azure_speech=raw.get("azure_speech", {}) or {},
+        languages=raw.get("languages", {}) or {},
         azure_openai=raw.get("azure_openai", {}) or {},
         log_level=log_level,
     )

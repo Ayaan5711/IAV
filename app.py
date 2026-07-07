@@ -56,6 +56,12 @@ SHOW_GENERATE_VIDEO = False
 # Content for now -- capability code stays intact for when it's ready to demo.
 SHOW_VIDEO_TRANSFORM_TABS = False
 
+# Text -> Audio hidden -- Audio-to-Audio's "Write from scratch" mode now
+# covers the same "paste an exact script, narrate it verbatim" use case,
+# plus everything else. Capability code (audio_text_to_speech.py) stays
+# intact for when it's needed again.
+SHOW_TEXT_TO_SPEECH_TAB = False
+
 
 # ----------------------------------------------------------------------
 # Shared UI primitives
@@ -467,70 +473,106 @@ def _render_video_output(result) -> None:  # type: ignore[no-untyped-def]
 
 
 def _audio_to_audio_tab() -> None:
-    """Recording -> transcript -> re-narrated audio, or a topic -> narration.
+    """Recording -> transcript -> re-narrated audio, or write from scratch.
 
-    Either way, ends with comprehension questions generated from the script.
+    "Write from scratch" covers both a topic/scenario (AI writes the
+    content) and an exact script (narrated verbatim, no rewriting) --
+    the latter is the same use case the old Text -> Audio tab covered.
+    Comprehension questions are optional, off by default.
     """
     st.subheader("Audio → Audio")
     st.caption(
-        "Upload a recording (transcribed via Azure Speech, multilingual incl. Indian "
-        "languages, falling back to Gemini if Azure isn't configured), or skip straight "
-        "to a topic/scenario. Either way: re-narrated audio plus comprehension questions."
+        "Upload a recording, or write narration from scratch. Transcription tries Azure "
+        "Speech first (multilingual), falling back to Gemini if Azure isn't configured. "
+        "Comprehension questions are optional."
     )
 
     s = load_config().capability("audio_to_audio")
-    az = load_config().azure_speech
+    langs = load_config().languages
 
-    mode_label = st.radio(
+    top_mode_label = st.radio(
         "Input type",
-        ["Upload recording", "Topic / Scenario"],
-        key="a2a-mode",
+        ["Upload recording", "Write from scratch"],
+        key="a2a-topmode",
         horizontal=True,
     )
-    mode = "upload" if mode_label.startswith("Upload") else "topic"
 
     uploaded = None
     free_text = None
     language = None
     length = None
 
-    if mode == "upload":
+    if top_mode_label == "Upload recording":
+        mode = "upload"
         uploaded = st.file_uploader(
             "Upload file", type=["mp3", "wav", "m4a", "ogg", "flac"], key="a2a-upload"
         )
-        languages = az.get("available_languages") or ["en-US"]
+        input_locales = langs.get("input_locales") or ["en-US"]
         language = st.selectbox(
-            "Spoken language", languages, index=_idx(languages, az.get("default_language")), key="a2a-lang"
+            "Spoken language (for transcription accuracy — not translation)",
+            input_locales, index=_idx(input_locales, langs.get("default_input_locale")), key="a2a-lang",
         )
     else:
+        sub_mode_label = st.radio(
+            "How should the content be produced?",
+            ["Topic / Scenario (AI writes it)", "Exact script (narrated verbatim)"],
+            key="a2a-submode",
+            horizontal=True,
+        )
+        mode = "topic" if sub_mode_label.startswith("Topic") else "script"
         free_text = st.text_area(
-            "Topic / scenario",
+            "Topic / scenario" if mode == "topic" else "Script (narrated exactly as written)",
             height=130,
-            placeholder="e.g. Explain how a diode works in a simple circuit",
+            placeholder=(
+                "e.g. Explain how a diode works in a simple circuit"
+                if mode == "topic" else "Paste the exact final script here…"
+            ),
             key="a2a-freetext",
         )
-        lengths = s.get("lengths") or ["Short (~30s)"]
-        length = st.selectbox("Length", lengths, key="a2a-length")
+        if mode == "topic":
+            lengths = s.get("lengths") or ["Short (~30s)"]
+            length = st.selectbox("Length", lengths, key="a2a-length")
 
-    cols = st.columns(3)
-    count = cols[0].number_input(
-        "Number of questions", min_value=1, max_value=20, value=int(s.get("default_question_count", 5)), key="a2a-count"
+    output_languages = langs.get("output_languages") or ["Same as input"]
+    target_language = st.selectbox(
+        "Output language",
+        output_languages,
+        index=_idx(output_languages, langs.get("default_output_language")),
+        key="a2a-targetlang",
+        help="Translates the final script into this language before narration. "
+             "\"Same as input\" skips translation entirely.",
     )
-    qtype = cols[1].selectbox("Question type", ["mcq", "short_answer", "conceptual"], key="a2a-qtype")
-    level = cols[2].selectbox(
-        "Level", ["school", "undergraduate", "postgraduate"], index=1, key="a2a-level"
+
+    generate_questions = st.checkbox(
+        "Also generate comprehension questions from this content", value=False, key="a2a-genq"
     )
+    count, qtype, level = 5, "mcq", "undergraduate"
+    if generate_questions:
+        cols = st.columns(3)
+        count = cols[0].number_input(
+            "Number of questions", min_value=1, max_value=20, value=int(s.get("default_question_count", 5)), key="a2a-count"
+        )
+        qtype = cols[1].selectbox("Question type", ["mcq", "short_answer", "conceptual"], key="a2a-qtype")
+        level = cols[2].selectbox(
+            "Level", ["school", "undergraduate", "postgraduate"], index=1, key="a2a-level"
+        )
 
     with st.expander("Advanced options", expanded=False):
         cols2 = st.columns(3)
         text_models = s.get("available_text_models") or [s["question_model"]]
         question_model = cols2[0].selectbox(
-            "Question / cleanup model (Gemini fallback)", text_models, index=_idx(text_models, s["question_model"]), key="a2a-qmodel"
+            "Text model — cleanup/content/translation/questions (Gemini fallback)",
+            text_models, index=_idx(text_models, s["question_model"]), key="a2a-qmodel",
         )
         tts_models = s.get("available_tts_models") or [s["tts_model"]]
         tts_model = cols2[1].selectbox("TTS model", tts_models, index=_idx(tts_models, s["tts_model"]), key="a2a-ttsmodel")
         with cols2[2]:
             engine = _engine_selectbox("a2a-engine")
+        st.caption(
+            "The engine above applies to every text step (cleanup, content writing, "
+            "translation, question generation). \"Auto\" uses Azure OpenAI by default, "
+            "falling back to Gemini only if Azure isn't configured or a call fails."
+        )
         voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
         voice = st.selectbox("Voice", voices, index=_idx(voices, s.get("voice_preset")), key="a2a-voice")
 
@@ -538,8 +580,8 @@ def _audio_to_audio_tab() -> None:
         if mode == "upload" and uploaded is None:
             st.warning("Upload a file first.")
             return
-        if mode == "topic" and not (free_text or "").strip():
-            st.warning("Enter a topic or scenario first.")
+        if mode in ("topic", "script") and not (free_text or "").strip():
+            st.warning("Enter a topic/scenario or a script first.")
             return
 
         logger.info("Audio -> Audio: Process clicked (mode=%s)", mode)
@@ -553,6 +595,8 @@ def _audio_to_audio_tab() -> None:
                     "tts_model": tts_model,
                     "engine": engine,
                     "voice": voice,
+                    "target_language": target_language,
+                    "generate_questions": generate_questions,
                     "count": int(count),
                     "type": qtype,
                     "level": level,
@@ -598,6 +642,9 @@ def _render_audio_to_audio_output(result) -> None:  # type: ignore[no-untyped-de
         st.caption(f"Transcribed via: {meta['asr_engine']}")
         if "fallback" in meta["asr_engine"]:
             st.caption("ℹ Azure Speech was unavailable for this run — used the Gemini ASR fallback.")
+    target_language = meta.get("target_language")
+    if target_language and target_language != "Same as input":
+        st.caption(f"🌐 Translated into {target_language} before narration.")
     if meta.get("raw_transcript"):
         with st.expander("Transcript"):
             st.text(meta["raw_transcript"])
@@ -647,6 +694,17 @@ def _audio_questions_tab() -> None:
             if mode == "topic" else "Paste the full passage or script text here…"
         ),
         key="aq-text",
+    )
+
+    langs = load_config().languages
+    output_languages = langs.get("output_languages") or ["Same as input"]
+    target_language = st.selectbox(
+        "Output language",
+        output_languages,
+        index=_idx(output_languages, langs.get("default_output_language")),
+        key="aq-targetlang",
+        help="Translates the passage into this language before narration and question "
+             "generation. \"Same as input\" skips translation entirely.",
     )
 
     cols = st.columns(2)
@@ -705,6 +763,7 @@ def _audio_questions_tab() -> None:
                             "level": level,
                             "text_model": text_model,
                             "engine": engine,
+                            "target_language": target_language,
                             "voice": voice,
                             "multi_speaker": multi_speaker,
                             "accent": accent,
@@ -732,6 +791,9 @@ def _render_audio_questions_output(result) -> None:  # type: ignore[no-untyped-d
     st.success(f"Done — generated {meta.get('question_count', '?')} questions.")
     if meta.get("duration_seconds"):
         st.metric("Audio duration", f"{meta['duration_seconds']:.1f}s")
+    target_language = meta.get("target_language")
+    if target_language and target_language != "Same as input":
+        st.caption(f"🌐 Translated into {target_language} before narration.")
     if meta.get("mode") == "topic" and meta.get("passage"):
         with st.expander("Generated passage"):
             st.write(meta["passage"])
@@ -922,6 +984,8 @@ def _generate_audio_tab() -> None:
                 elapsed = time.perf_counter() - start
             st.success("Done.")
             _render_time_taken(elapsed)
+            if result.metadata.get("duration_seconds"):
+                st.metric("Audio duration", f"{result.metadata['duration_seconds']:.1f}s")
             st.audio(str(result.file_path))
             with result.file_path.open("rb") as fh:
                 st.download_button(
@@ -1041,7 +1105,10 @@ _show_session_cost()
 st.header("Transform Existing Content")
 st.caption("Enhance or analyse material the SME already produced — a sketch, a recording, a video.")
 
-transform_titles = ["Image", "Text → Audio", "Audio → Audio"]
+transform_titles = ["Image"]
+if SHOW_TEXT_TO_SPEECH_TAB:
+    transform_titles.append("Text → Audio")
+transform_titles.append("Audio → Audio")
 if SHOW_VIDEO_TRANSFORM_TABS:
     transform_titles += ["Video → Questions", "Video → Professional"]
 transform_titles.append("Audio → Questions")
@@ -1071,20 +1138,21 @@ with _transform_tab("Image"):
         options_label="Model & resolution",
     )
 
-with _transform_tab("Text → Audio"):
-    _capability_tab(
-        title="Text → Audio",
-        description="Paste a script. Get studio-quality narration in the chosen voice preset.",
-        accept_types=None,
-        default_instruction=(
-            "Read clearly and at a measured, neutral pace, suitable for a "
-            "listen-and-repeat English assessment."
-        ),
-        run=_run_text_to_speech,
-        output_renderer=_render_audio_output,
-        options_renderer=_tts_options,
-        options_label="Model & voice",
-    )
+if SHOW_TEXT_TO_SPEECH_TAB:
+    with _transform_tab("Text → Audio"):
+        _capability_tab(
+            title="Text → Audio",
+            description="Paste a script. Get studio-quality narration in the chosen voice preset.",
+            accept_types=None,
+            default_instruction=(
+                "Read clearly and at a measured, neutral pace, suitable for a "
+                "listen-and-repeat English assessment."
+            ),
+            run=_run_text_to_speech,
+            output_renderer=_render_audio_output,
+            options_renderer=_tts_options,
+            options_label="Model & voice",
+        )
 
 with _transform_tab("Audio → Audio"):
     _audio_to_audio_tab()

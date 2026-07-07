@@ -96,3 +96,27 @@ def generate_text(
 
     fallback_label = f"{label} (Gemini fallback)" if attempted_azure else label
     return _call_gemini(gemini_client, prompt, label=fallback_label, model=gemini_model, response_mime_type=response_mime_type)
+
+
+def translate_text(
+    *,
+    gemini_client: GeminiClient,
+    gemini_model: str,
+    text: str,
+    target_language: str,
+    translate_instruction_template: str,
+    azure_deployment: str | None = None,
+    engine: str = "auto",
+    label: str = "translate",
+) -> TextGenerationResult:
+    """Translates `text` into `target_language` via the same engine choice
+    as everything else -- shows up as its own tracked call/cost line.
+
+    Caller decides whether translation is needed at all (skip when
+    target_language is "Same as input" or unset); this always translates.
+    """
+    prompt = translate_instruction_template.format(target_language=target_language, text=text)
+    return generate_text(
+        gemini_client=gemini_client, gemini_model=gemini_model, prompt=prompt,
+        label=label, azure_deployment=azure_deployment, engine=engine,
+    )
