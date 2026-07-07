@@ -123,7 +123,12 @@ def _show_session_cost() -> None:
         )
         total = st.session_state.get("session_cost_usd", 0.0)
         rate = _get_inr_rate()
-        st.metric("Total this session", f"${total:.6f}" + (f" (₹{total * rate:.2f})" if rate else ""))
+        st.metric(
+            "Total this session",
+            f"${total:.6f}",
+            delta=f"₹{total * rate:.2f}" if rate else None,
+            delta_color="off",
+        )
         st.caption("Token counts are real; dollar amounts are estimates. See Cloud Billing for actual charges.")
         if st.button("Reset session total", key="reset-session-cost"):
             st.session_state["session_cost_usd"] = 0.0
@@ -148,14 +153,14 @@ def _render_cost(metadata: dict | None) -> None:
 
     thoughts_tok = cost.get("total_thoughts_tokens", 0)
     inr_rate = _get_inr_rate()
-    inr_suffix = f" (₹{total * inr_rate:.2f})" if inr_rate else ""
-    label = f"Cost — est. ${total:.6f}{inr_suffix} ({prompt_tok:,} in / {output_tok:,} out tokens)"
+    label = f"Cost — est. ${total:.6f} ({prompt_tok:,} in / {output_tok:,} out tokens)"
     if thoughts_tok:
         label += f", {thoughts_tok:,} reasoning tokens"
     with st.expander(label, expanded=False):
         if cost.get("any_unverified"):
             st.warning("Some rates below are unverified against an official Google source.")
         if inr_rate:
+            st.metric("Total (this result)", f"${total:.6f}", delta=f"₹{total * inr_rate:.2f}", delta_color="off")
             st.caption(f"Converted at ₹{inr_rate:.2f} / $1 (rate entered manually in the sidebar).")
         for call in calls:
             badge = "verified" if call.get("verified") else "⚠ unverified"
@@ -166,8 +171,14 @@ def _render_cost(metadata: dict | None) -> None:
             cols = st.columns(4)
             cols[0].metric("Input tokens", f"{tok.get('prompt', 0):,}")
             cols[1].metric("Output tokens", f"{tok.get('output', 0):,}")
-            cols[2].metric("Input cost", f"${input_usd:.6f}" + (f" / ₹{input_usd * inr_rate:.2f}" if inr_rate else ""))
-            cols[3].metric("Output cost", f"${output_usd:.6f}" + (f" / ₹{output_usd * inr_rate:.2f}" if inr_rate else ""))
+            cols[2].metric(
+                "Input cost", f"${input_usd:.6f}",
+                delta=f"₹{input_usd * inr_rate:.2f}" if inr_rate else None, delta_color="off",
+            )
+            cols[3].metric(
+                "Output cost", f"${output_usd:.6f}",
+                delta=f"₹{output_usd * inr_rate:.2f}" if inr_rate else None, delta_color="off",
+            )
             if tok.get("thoughts") or tok.get("tool_use") or tok.get("cached"):
                 extras = []
                 if tok.get("thoughts"):
