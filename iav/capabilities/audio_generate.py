@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import io
 import logging
-import os
 import shutil
 import subprocess
 import tempfile
@@ -70,7 +69,7 @@ class AudioGenerate(Capability):
         if errors:
             raise ValueError("; ".join(errors))
 
-        tts_model = os.environ.get("GEMINI_TTS_MODEL") or params.get("model") or self._settings["model"]
+        tts_model = params.get("model") or self._settings["model"]
         text_model = params.get("text_model") or self._settings.get("text_model", tts_model)
         azure_deployment = self.config.azure_openai.get("default_deployment")
         engine = params.get("engine", "auto")
@@ -135,6 +134,7 @@ class AudioGenerate(Capability):
             raise AudioGenerateError(f"Model returned no audio. Model said: {note}")
 
         wav_bytes = _wrap_pcm_as_wav(result.audio_bytes, sample_rate=sample_rate)
+        duration_seconds = _pcm_duration_seconds(result.audio_bytes, sample_rate=sample_rate)
 
         requested_format = (params.get("output_format") or self._settings.get("output_format", "wav")).lower()
         output_bytes, actual_format, format_note = _maybe_convert_to_mp3(wav_bytes, requested_format)
@@ -159,6 +159,7 @@ class AudioGenerate(Capability):
                 "speed": speed,
                 "tone": tone,
                 "length": length,
+                "duration_seconds": duration_seconds,
                 "output_bytes": len(output_bytes),
                 "mime_type": "audio/mpeg" if actual_format == "mp3" else "audio/wav",
                 "format_note": format_note,
@@ -181,6 +182,12 @@ def _wrap_pcm_as_wav(
         wav.setframerate(sample_rate)
         wav.writeframes(pcm_bytes)
     return buf.getvalue()
+
+
+def _pcm_duration_seconds(pcm_bytes: bytes, *, sample_rate: int, channels: int = 1, sample_width: int = 2) -> float:
+    if sample_rate <= 0:
+        return 0.0
+    return len(pcm_bytes) / (sample_rate * channels * sample_width)
 
 
 def _maybe_convert_to_mp3(wav_bytes: bytes, requested_format: str) -> tuple[bytes, str, str | None]:

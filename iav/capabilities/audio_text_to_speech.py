@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import io
 import logging
-import os
 import wave
 
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
@@ -40,7 +39,7 @@ class TextToSpeech(Capability):
 
         params = payload.params or {}
         instruction = (payload.instruction or "").strip() or self._settings.get("default_instruction", "")
-        model = params.get("model") or os.environ.get("GEMINI_TTS_MODEL") or self._settings["model"]
+        model = params.get("model") or self._settings["model"]
         voice = params.get("voice") or self._settings.get("voice_preset", "Kore")
         sample_rate = int(self._settings.get("sample_rate_hz", 24000))
 

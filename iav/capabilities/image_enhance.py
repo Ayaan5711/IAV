@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import mimetypes
-import os
 from pathlib import Path
 
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
@@ -45,7 +44,7 @@ class ImageEnhance(Capability):
         mime_type = _guess_mime(source)
         instruction = (payload.instruction or "").strip() or self._settings["default_instruction"]
         params = payload.params or {}
-        model = params.get("model") or os.environ.get("GEMINI_IMAGE_MODEL") or self._settings["model"]
+        model = params.get("model") or self._settings["model"]
         resolution = params.get("resolution") or self._settings.get("resolution")
         output_format = params.get("output_format") or self._settings.get("output_format")
 

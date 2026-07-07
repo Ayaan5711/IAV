@@ -10,7 +10,6 @@ it means one short generated clip.
 from __future__ import annotations
 
 import logging
-import os
 
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
 from iav.capabilities.prompt_schema import (
@@ -53,7 +52,7 @@ class VideoGenerate(Capability):
         if errors:
             raise ValueError("; ".join(errors))
 
-        model = os.environ.get("GEMINI_VEO_MODEL") or params.get("model") or self._settings["model"]
+        model = params.get("model") or self._settings["model"]
         resolution = params.get("resolution") or self._settings.get("resolution", "720p")
         duration_seconds = int(params.get("duration_seconds") or self._settings.get("duration_seconds", 8))
         generate_audio = bool(params.get("generate_audio", self._settings.get("generate_audio", True)))

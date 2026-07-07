@@ -17,7 +17,6 @@ from __future__ import annotations
 import io
 import json
 import logging
-import os
 import wave
 from typing import Any
 
@@ -26,7 +25,7 @@ from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
 from iav.models.pricing import summarize_costs
-from iav.models.text_generation import TextGenerationError, generate_text
+from iav.models.text_generation import TextGenerationError, generate_text, translate_text
 from iav.storage import save_output
 
 logger = logging.getLogger(__name__)
@@ -53,12 +52,12 @@ class AudioQuestionGeneration(Capability):
                 "AudioQuestionGeneration requires text input (a topic/scenario or a passage)."
             )
 
-        text_model = os.environ.get("GEMINI_TEXT_MODEL") or self._settings["text_model"]
-        tts_model = os.environ.get("GEMINI_TTS_MODEL") or self._settings["tts_model"]
-        voice = self._settings.get("voice_preset", "Kore")
+        params = payload.params or {}
+        text_model = params.get("text_model") or self._settings["text_model"]
+        tts_model = params.get("tts_model") or self._settings["tts_model"]
+        voice = params.get("voice") or self._settings.get("voice_preset", "Kore")
         sample_rate = int(self._settings.get("sample_rate_hz", 24000))
 
-        params = payload.params or {}
         mode = params.get("mode", "topic")  # "topic" | "passage"
         count = int(params.get("count", self._settings.get("default_question_count", 5)))
         qtype = params.get("type") or self._settings.get("default_question_type", "mcq")
@@ -70,6 +69,9 @@ class AudioQuestionGeneration(Capability):
         multi_speaker = bool(params.get("multi_speaker", False))
         azure_deployment = self.config.azure_openai.get("default_deployment")
         engine = params.get("engine", "auto")
+        target_language = params.get("target_language") or self.config.languages.get(
+            "default_output_language", "Same as input"
+        )
 
         calls: list[dict[str, Any]] = []
 
@@ -93,6 +95,23 @@ class AudioQuestionGeneration(Capability):
             passage = passage_result.text.strip()
             if not passage:
                 raise AudioQuestionGenerationError("Model returned no passage text.")
+
+        # 1b. Translate into a different output language, if requested --------
+        if target_language and target_language != "Same as input":
+            translate_template = self.config.languages.get("translate_instruction")
+            if not translate_template:
+                raise AudioQuestionGenerationError("No translate_instruction configured under languages: in config.yaml.")
+            logger.info("audio_question_generation: translating passage into %s", target_language)
+            try:
+                translated = translate_text(
+                    gemini_client=self.client, gemini_model=text_model, text=passage,
+                    target_language=target_language, translate_instruction_template=translate_template,
+                    azure_deployment=azure_deployment, engine=engine,
+                )
+            except (GeminiCallError, TextGenerationError) as exc:
+                raise AudioQuestionGenerationError(f"Translation to {target_language} failed: {exc}") from exc
+            calls.append(translated.call_record)
+            passage = translated.text.strip() or passage
 
         # 2. Narrate the passage ----------------------------------------------
         narration_prompt = self._settings["narration_instruction"].format(
@@ -182,6 +201,7 @@ class AudioQuestionGeneration(Capability):
             metadata={
                 "mode": mode,
                 "passage": passage,
+                "target_language": target_language,
                 "questions_json_path": str(json_path),
                 "text_model": text_model,
                 "tts_model": tts_model,

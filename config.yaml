@@ -52,6 +52,28 @@ pricing:
       input_text: 0.50
       output_audio: 10.00
 
+    gemini-3-pro-image:        # Nano Banana Pro
+      verified: true
+      unit: per_million_tokens
+      input: 2.00
+      output_text: 12.00
+      output_image: 120.00
+
+    gemini-2.5-pro:  # not on the official pricing page for this project; public-rate estimate
+      verified: false
+      unit: per_million_tokens
+      input_text: 1.25
+      input_image: 1.25
+      input_audio: 1.25
+      input_video: 1.25
+      output_text: 10.00
+
+    gemini-2.5-pro-preview-tts:  # rough estimate, confirm before trusting
+      verified: false
+      unit: per_million_tokens
+      input_text: 1.00
+      output_audio: 20.00
+
     # Veo billing is per second of generated video, not per token. None of
     # these could be confirmed on the official Vertex pricing page or Cloud
     # Billing (no access) -- figures are an LLM-sourced estimate. Confirm
@@ -84,14 +106,17 @@ pricing:
       input_text: 0.15
       output_text: 0.60
 
-# Azure Speech is used by audio_to_audio for transcription. Credentials
-# (AZURE_SPEECH_KEY, AZURE_SPEECH_REGION) come from env vars only, never
-# from this file. If they're unset, or the SDK isn't installed, that
-# capability falls back to Gemini ASR automatically -- see
-# iav/models/azure_speech_client.py.
-azure_speech:
-  default_language: en-IN
-  available_languages:
+# Single place for every language option in the app -- input (Azure Speech
+# ASR locale, used only for transcription accuracy) and output (the
+# language narration/content ends up in -- an instruction to the text
+# engine to write directly in that language or translate into it). Azure
+# Speech credentials (AZURE_SPEECH_KEY, AZURE_SPEECH_REGION) still come
+# from env vars only, never from this file -- see
+# iav/models/azure_speech_client.py. Without them, that capability falls
+# back to Gemini ASR automatically.
+languages:
+  default_input_locale: en-IN
+  input_locales:      # BCP-47 codes Azure Speech needs for ASR
     - en-IN   # English (India)
     - hi-IN   # Hindi
     - ta-IN   # Tamil
@@ -104,6 +129,70 @@ azure_speech:
     - pa-IN   # Punjabi
     - en-US
     - en-GB
+    - ja-JP   # Japanese
+    - ko-KR   # Korean
+    - zh-CN   # Mandarin Chinese
+    - ar-EG   # Arabic
+    - fr-FR   # French
+    - de-DE   # German
+    - es-ES   # Spanish
+    - pt-BR   # Portuguese
+    - ru-RU   # Russian
+    - it-IT   # Italian
+    - nl-NL   # Dutch
+    - tr-TR   # Turkish
+    - vi-VN   # Vietnamese
+    - th-TH   # Thai
+    - id-ID   # Indonesian
+    - pl-PL   # Polish
+    - uk-UA   # Ukrainian
+    - ro-RO   # Romanian
+
+  default_output_language: "Same as input"
+  output_languages:   # plain names -- an instruction to the text engine
+                       # ("write/translate this in {language}"); Gemini's
+                       # TTS infers pronunciation from the resulting text,
+                       # no separate language parameter needed on that side.
+    - "Same as input"
+    - English
+    - Hindi
+    - Tamil
+    - Telugu
+    - Bengali
+    - Marathi
+    - Gujarati
+    - Kannada
+    - Malayalam
+    - Punjabi
+    - Japanese
+    - Korean
+    - Mandarin Chinese
+    - Arabic
+    - French
+    - German
+    - Spanish
+    - Portuguese
+    - Russian
+    - Italian
+    - Dutch
+    - Turkish
+    - Vietnamese
+    - Thai
+    - Indonesian
+    - Polish
+    - Ukrainian
+    - Romanian
+
+  translate_instruction: |
+    Translate the following text into {target_language}. Preserve the
+    meaning, tone, and factual content exactly -- do not summarise,
+    paraphrase beyond what the translation requires, or add commentary.
+    Return ONLY the translated text, nothing else.
+
+    Text:
+    """
+    {text}
+    """
 
 # Azure OpenAI is the primary engine for every pure text-generation step
 # (transcript cleanup, narration/passage/content writing, question
@@ -132,9 +221,9 @@ capabilities:
     # the same question schema as video_to_questions. Output questions are
     # TEXT (read on screen), not narrated.
     text_model: gemini-2.5-flash
-    available_text_models: [gemini-2.5-flash]
+    available_text_models: [gemini-2.5-flash, gemini-2.5-pro]
     tts_model: gemini-2.5-flash-preview-tts
-    available_tts_models: [gemini-2.5-flash-preview-tts]
+    available_tts_models: [gemini-2.5-flash-preview-tts, gemini-2.5-pro-preview-tts]
     voice_preset: Kore
     available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
     sample_rate_hz: 24000
@@ -196,7 +285,7 @@ capabilities:
     # Nano Banana 2 — confirmed working on this Vertex AI project.
     # available_models populates the UI's model dropdown; model is the default.
     model: gemini-3.1-flash-image
-    available_models: [gemini-3.1-flash-image]
+    available_models: [gemini-3.1-flash-image, gemini-3-pro-image]
     resolution: "2K"
     available_resolutions: ["1K", "2K", "4K"]
     default_instruction: |
@@ -220,7 +309,7 @@ capabilities:
     # Gemini TTS path. Voice preset is a placeholder — needs sign-off from
     # whoever owns the English curriculum before going to real users.
     model: gemini-2.5-flash-preview-tts
-    available_models: [gemini-2.5-flash-preview-tts]
+    available_models: [gemini-2.5-flash-preview-tts, gemini-2.5-pro-preview-tts]
     voice_preset: Kore
     available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
     output_format: wav
@@ -241,9 +330,9 @@ capabilities:
     # Exactly 2 Gemini models here: one for TTS, one for everything text
     # (cleanup, content writing, question generation).
     question_model: gemini-2.5-flash
-    available_text_models: [gemini-2.5-flash]
+    available_text_models: [gemini-2.5-flash, gemini-2.5-pro]
     tts_model: gemini-2.5-flash-preview-tts
-    available_tts_models: [gemini-2.5-flash-preview-tts]
+    available_tts_models: [gemini-2.5-flash-preview-tts, gemini-2.5-pro-preview-tts]
     voice_preset: Kore
     available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
     output_format: wav
@@ -387,7 +476,7 @@ capabilities:
 
   image_generate:
     model: gemini-3.1-flash-image
-    available_models: [gemini-3.1-flash-image]
+    available_models: [gemini-3.1-flash-image, gemini-3-pro-image]
     resolution: "2K"
     available_resolutions: ["1K", "2K", "4K"]
     output_format: png
@@ -414,9 +503,9 @@ capabilities:
     #   script: the user pastes the exact final script -- narrated verbatim,
     #           no content-generation step.
     model: gemini-2.5-flash-preview-tts
-    available_models: [gemini-2.5-flash-preview-tts]
+    available_models: [gemini-2.5-flash-preview-tts, gemini-2.5-pro-preview-tts]
     text_model: gemini-2.5-flash
-    available_text_models: [gemini-2.5-flash]
+    available_text_models: [gemini-2.5-flash, gemini-2.5-pro]
     voice_preset: Kore
     available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
     sample_rate_hz: 24000

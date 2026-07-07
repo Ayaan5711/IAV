@@ -1,16 +1,24 @@
 """Audio → Audio.
 
-Two input modes:
-    upload: raw recording -> transcription -> optional cleanup -> TTS
-            -> comprehension questions generated from the transcript.
+Three input modes:
+    upload: raw recording -> transcription -> optional cleanup -> TTS.
     topic:  a topic/scenario brief -> Gemini writes the narration content
-            directly -> TTS -> questions. No transcription step.
+            directly -> TTS. No transcription step.
+    script: an exact script pasted verbatim -> TTS, no rewriting at all --
+            this is the same "paste a script, narrate it" use case the
+            separate Text-to-Audio tab used to cover.
 
-Transcription tries Azure Speech first (multilingual, including Indian
-languages, and more robust to background noise than prompting a
-general-purpose model) and falls back to Gemini ASR if Azure isn't
-configured or the call fails -- this pipeline never hard-fails just
-because Azure credentials aren't present.
+Optionally (toggle in the UI), also generates comprehension questions from
+the final script -- off by default, since not every use of this tab wants
+a quiz on top of the audio.
+
+Optionally, the script can be translated into a different output language
+before narration (see iav/models/text_generation.py's translate_text()) --
+default is "Same as input", meaning no translation happens at all.
+
+Transcription tries Azure Speech first (multilingual) and falls back to
+Gemini ASR if Azure isn't configured or the call fails -- this pipeline
+never hard-fails just because Azure credentials aren't present.
 
 The original speaker's voice is NOT preserved — output uses the voice preset.
 """
@@ -25,13 +33,13 @@ import wave
 from pathlib import Path
 from typing import Any
 
-from iav.capabilities._json_utils import JsonParseError, parse_json_loose, questions_as_markdown
+from iav.capabilities._json_utils import JsonParseError, parse_json_loose
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
 from iav.models import azure_speech_client
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
 from iav.models.pricing import summarize_costs
-from iav.models.text_generation import TextGenerationError, generate_text
+from iav.models.text_generation import TextGenerationError, generate_text, translate_text
 from iav.storage import save_output
 
 logger = logging.getLogger(__name__)
@@ -51,16 +59,20 @@ class AudioToAudio(Capability):
 
     def process(self, payload: CapabilityInput) -> CapabilityOutput:
         params = payload.params or {}
-        mode = params.get("mode", "upload")  # "upload" | "topic"
+        mode = params.get("mode", "upload")  # "upload" | "topic" | "script"
         question_model = params.get("question_model") or self._settings["question_model"]
         tts_model = params.get("tts_model") or self._settings["tts_model"]
         voice = params.get("voice") or self._settings.get("voice_preset", "Kore")
         sample_rate = int(self._settings.get("sample_rate_hz", 24000))
+        azure_deployment = self.config.azure_openai.get("default_deployment")
+        engine = params.get("engine", "auto")
+        target_language = params.get("target_language") or self.config.languages.get(
+            "default_output_language", "Same as input"
+        )
+        want_questions = bool(params.get("generate_questions", False))
         count = int(params.get("count", self._settings.get("default_question_count", 5)))
         qtype = params.get("type") or self._settings.get("default_question_type", "mcq")
         level = params.get("level") or self._settings.get("default_level", "undergraduate")
-        azure_deployment = self.config.azure_openai.get("default_deployment")
-        engine = params.get("engine", "auto")
 
         calls: list[dict[str, Any]] = []
         raw_transcript: str | None = None
@@ -74,7 +86,7 @@ class AudioToAudio(Capability):
             if not source.exists():
                 raise FileNotFoundError(f"Input audio not found: {source}")
             audio_bytes = source.read_bytes()
-            language = params.get("language") or self._settings.get("default_language", "en-US")
+            language = params.get("language") or self.config.languages.get("default_input_locale", "en-US")
 
             transcript = None
             if azure_speech.is_configured():
@@ -128,6 +140,11 @@ class AudioToAudio(Capability):
                     script = cleaned.text.strip() or transcript
             else:
                 script = transcript
+        elif mode == "script":
+            raw_text = (payload.text or payload.instruction or "").strip()
+            if not raw_text:
+                raise ValueError("AudioToAudio (script mode) requires an exact script")
+            script = raw_text
         else:
             raw_text = (payload.text or payload.instruction or "").strip()
             if not raw_text:
@@ -148,8 +165,25 @@ class AudioToAudio(Capability):
             if not script:
                 raise AudioToAudioError("Model returned no content.")
 
+        # Translate into a different output language, if requested ------------
+        if target_language and target_language != "Same as input":
+            translate_template = self.config.languages.get("translate_instruction")
+            if not translate_template:
+                raise AudioToAudioError("No translate_instruction configured under languages: in config.yaml.")
+            logger.info("audio_to_audio: translating script into %s", target_language)
+            try:
+                translated = translate_text(
+                    gemini_client=self.client, gemini_model=question_model, text=script,
+                    target_language=target_language, translate_instruction_template=translate_template,
+                    azure_deployment=azure_deployment, engine=engine,
+                )
+            except (GeminiCallError, TextGenerationError) as exc:
+                raise AudioToAudioError(f"Translation to {target_language} failed: {exc}") from exc
+            calls.append(translated.call_record)
+            script = translated.text.strip() or script
+
         # Synthesise speech ---------------------------------------------------
-        tts_instruction = (payload.instruction or "").strip() or None if mode == "upload" else None
+        tts_instruction = (payload.instruction or "").strip() or None if mode != "topic" else None
         logger.info("audio_to_audio: synthesising model=%s voice=%s script_chars=%d", tts_model, voice, len(script))
         try:
             tts_result = self.client.synthesize_speech(
@@ -170,41 +204,45 @@ class AudioToAudio(Capability):
         duration_seconds = _pcm_duration_seconds(tts_result.audio_bytes, sample_rate=sample_rate)
         output_path = save_output(data=wav_bytes, suffix=".wav", capability=self.name)
 
-        # Generate comprehension questions from the script --------------------
-        q_prompt = self._settings["questions_instruction"].format(
-            count=count, question_type=qtype, level=level, passage=script
-        )
-        logger.info("audio_to_audio: generating questions")
-        try:
-            q_result = generate_text(
-                gemini_client=self.client, gemini_model=question_model, prompt=q_prompt,
-                label="generate_questions", azure_deployment=azure_deployment, engine=engine,
-                response_mime_type="application/json",
+        # Generate comprehension questions from the script (optional) ---------
+        questions: list | None = None
+        parsed: dict | None = None
+        json_path: Path | None = None
+        if want_questions:
+            q_prompt = self._settings["questions_instruction"].format(
+                count=count, question_type=qtype, level=level, passage=script
             )
-        except (GeminiCallError, TextGenerationError) as exc:
-            raise AudioToAudioError(f"Question generation failed: {exc}") from exc
-        calls.append(q_result.call_record)
+            logger.info("audio_to_audio: generating questions")
+            try:
+                q_result = generate_text(
+                    gemini_client=self.client, gemini_model=question_model, prompt=q_prompt,
+                    label="generate_questions", azure_deployment=azure_deployment, engine=engine,
+                    response_mime_type="application/json",
+                )
+            except (GeminiCallError, TextGenerationError) as exc:
+                raise AudioToAudioError(f"Question generation failed: {exc}") from exc
+            calls.append(q_result.call_record)
 
-        q_raw = q_result.text.strip()
-        if not q_raw:
-            raise AudioToAudioError("Model returned no question text.")
-        try:
-            parsed = parse_json_loose(q_raw)
-        except JsonParseError as exc:
-            raise AudioToAudioError(str(exc)) from exc
+            q_raw = q_result.text.strip()
+            if not q_raw:
+                raise AudioToAudioError("Model returned no question text.")
+            try:
+                parsed = parse_json_loose(q_raw)
+            except JsonParseError as exc:
+                raise AudioToAudioError(str(exc)) from exc
 
-        questions = parsed.get("questions") if isinstance(parsed, dict) else None
-        if not isinstance(questions, list) or not questions:
-            raise AudioToAudioError("Model returned no usable questions.")
+            questions = parsed.get("questions") if isinstance(parsed, dict) else None
+            if not isinstance(questions, list) or not questions:
+                raise AudioToAudioError("Model returned no usable questions.")
 
-        json_bytes = json.dumps(parsed, indent=2, ensure_ascii=False).encode("utf-8")
-        json_path = save_output(data=json_bytes, suffix=".json", capability=f"{self.name}-questions")
+            json_bytes = json.dumps(parsed, indent=2, ensure_ascii=False).encode("utf-8")
+            json_path = save_output(data=json_bytes, suffix=".json", capability=f"{self.name}-questions")
 
         cost = summarize_costs(calls, self.config.pricing)
 
         logger.info(
-            "audio_to_audio: wrote %s + %s (mode=%s, asr_engine=%s, %d questions, est. cost $%.6f)",
-            output_path, json_path, mode, asr_engine, len(questions), cost["total_usd"],
+            "audio_to_audio: wrote %s (mode=%s, asr_engine=%s, target_language=%s, questions=%s, est. cost $%.6f)",
+            output_path, mode, asr_engine, target_language, len(questions) if questions else 0, cost["total_usd"],
         )
 
         return CapabilityOutput(
@@ -214,6 +252,7 @@ class AudioToAudio(Capability):
             metadata={
                 "mode": mode,
                 "language": language,
+                "target_language": target_language,
                 "asr_engine": asr_engine,
                 "question_model": question_model,
                 "tts_model": tts_model,
@@ -221,8 +260,9 @@ class AudioToAudio(Capability):
                 "raw_transcript": raw_transcript,
                 "cleaned_script": script,
                 "duration_seconds": duration_seconds,
-                "question_count": len(questions),
-                "questions_json_path": str(json_path),
+                "generate_questions": want_questions,
+                "question_count": len(questions) if questions else 0,
+                "questions_json_path": str(json_path) if json_path else None,
                 "mime_type": "audio/wav",
                 "cost": cost,
             },
