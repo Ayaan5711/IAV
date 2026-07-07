@@ -40,7 +40,18 @@ _client_singleton = None
 
 
 def is_configured() -> bool:
-    return _SDK_AVAILABLE and bool(os.environ.get("AZURE_OPENAI_ENDPOINT")) and bool(os.environ.get("AZURE_OPENAI_API_KEY"))
+    if not _SDK_AVAILABLE:
+        logger.info("azure_openai: not configured -- the 'openai' package is not installed")
+        return False
+    endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
+    key = os.environ.get("AZURE_OPENAI_API_KEY")
+    if not endpoint or not key:
+        logger.info(
+            "azure_openai: not configured -- AZURE_OPENAI_ENDPOINT=%s, AZURE_OPENAI_API_KEY=%s",
+            "set" if endpoint else "MISSING", "set" if key else "MISSING",
+        )
+        return False
+    return True
 
 
 def _get_client() -> "AzureOpenAI":

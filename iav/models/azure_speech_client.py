@@ -47,7 +47,18 @@ class AzureTranscriptionResult:
 
 
 def is_configured() -> bool:
-    return _SDK_AVAILABLE and bool(os.environ.get("AZURE_SPEECH_KEY")) and bool(os.environ.get("AZURE_SPEECH_REGION"))
+    if not _SDK_AVAILABLE:
+        logger.info("azure_speech: not configured -- azure-cognitiveservices-speech is not installed")
+        return False
+    key = os.environ.get("AZURE_SPEECH_KEY")
+    region = os.environ.get("AZURE_SPEECH_REGION")
+    if not key or not region:
+        logger.info(
+            "azure_speech: not configured -- AZURE_SPEECH_KEY=%s, AZURE_SPEECH_REGION=%s",
+            "set" if key else "MISSING", "set" if region else "MISSING",
+        )
+        return False
+    return True
 
 
 def transcribe_file(audio_path: Path, *, language: str = "en-US") -> AzureTranscriptionResult:

@@ -663,7 +663,7 @@ def _render_audio_to_audio_output(result) -> None:  # type: ignore[no-untyped-de
                 st.download_button(
                     "Download questions JSON", data=fh.read(), file_name=Path(q_path).name, mime="application/json"
                 )
-    if meta.get("asr_engine", "").startswith("Azure"):
+    if (meta.get("asr_engine") or "").startswith("Azure"):
         st.caption("ℹ Azure Speech transcription is billed separately by Azure — not included in the cost estimate below.")
     _render_cost(meta)
 
