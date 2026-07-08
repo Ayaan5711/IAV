@@ -87,9 +87,23 @@ class AudioToAudio(Capability):
                 raise FileNotFoundError(f"Input audio not found: {source}")
             audio_bytes = source.read_bytes()
             language = params.get("language") or self.config.languages.get("default_input_locale", "en-US")
+            asr_choice = (params.get("asr_engine") or "auto").lower()  # "auto" | "gemini" | "azure"
 
             transcript = None
-            if azure_speech_client.is_configured():
+            if asr_choice == "azure":
+                if not azure_speech_client.is_configured():
+                    raise AudioToAudioError(
+                        "Azure Speech was selected but isn't configured "
+                        "(AZURE_SPEECH_KEY / AZURE_SPEECH_REGION)."
+                    )
+                logger.info("audio_to_audio: transcribing via Azure Speech (language=%s)", language)
+                try:
+                    azure_result = azure_speech_client.transcribe_file(source, language=language)
+                    transcript = azure_result.text
+                    asr_engine = f"Azure Speech ({language})"
+                except azure_speech_client.AzureSpeechUnavailable as exc:
+                    raise AudioToAudioError(f"Azure Speech transcription failed: {exc}") from exc
+            elif asr_choice == "auto" and azure_speech_client.is_configured():
                 logger.info("audio_to_audio: transcribing via Azure Speech (language=%s)", language)
                 try:
                     azure_result = azure_speech_client.transcribe_file(source, language=language)
@@ -97,10 +111,14 @@ class AudioToAudio(Capability):
                     asr_engine = f"Azure Speech ({language})"
                 except azure_speech_client.AzureSpeechUnavailable as exc:
                     logger.warning("Azure Speech transcription failed, falling back to Gemini ASR: %s", exc)
+            elif asr_choice == "gemini":
+                logger.info("audio_to_audio: Gemini selected explicitly for transcription")
             else:
                 logger.info("audio_to_audio: Azure Speech not configured, using Gemini ASR")
 
             if transcript is None:
+                # Gemini has no language parameter here -- it auto-detects the
+                # spoken language directly from the audio itself.
                 mime_type = _guess_audio_mime(source)
                 try:
                     asr_result = self.client.transcribe_audio(
@@ -111,9 +129,10 @@ class AudioToAudio(Capability):
                     )
                 except GeminiCallError as exc:
                     raise AudioToAudioError(f"Gemini ASR call failed: {exc}") from exc
-                calls.append({"label": "transcribe (Gemini fallback)", "model": question_model, "usage": asr_result.usage})
+                label = "transcribe (Gemini fallback)" if asr_choice == "auto" else "transcribe (Gemini)"
+                calls.append({"label": label, "model": question_model, "usage": asr_result.usage})
                 transcript = (asr_result.text or "").strip()
-                asr_engine = f"Gemini ASR fallback ({question_model})"
+                asr_engine = f"Gemini ASR ({question_model})" if asr_choice == "gemini" else f"Gemini ASR fallback ({question_model})"
 
             transcript = (transcript or "").strip()
             if not transcript:

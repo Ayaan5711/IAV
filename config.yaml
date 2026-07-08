@@ -304,6 +304,35 @@ capabilities:
       - Crisp, legible typography for any labels.
       - No shading, decoration, or stylistic flourishes that were not in the
         original sketch.
+    # Optional comprehension questions generated from the rendered image
+    # (off by default, toggled in the UI) -- a text-out call via Gemini's
+    # multimodal understanding, not routable through Azure OpenAI.
+    question_model: gemini-2.5-flash
+    available_text_models: [gemini-2.5-flash, gemini-2.5-pro]
+    default_question_count: 5
+    default_question_type: mcq      # mcq | short_answer | conceptual
+    default_level: undergraduate    # school | undergraduate | postgraduate
+    questions_instruction: |
+      You are an experienced subject-matter expert generating exam-quality
+      questions based strictly on the image provided.
+
+      Generate {count} {question_type} questions at the {level} level based
+      on what the image depicts. Do not invent details not shown in it.
+
+      Return ONLY a JSON object matching this schema:
+      {{
+        "questions": [
+          {{
+            "id": <int>,
+            "type": "<question_type>",
+            "stem": "<the question text>",
+            "options": ["A...", "B...", "C...", "D..."],   // mcq only
+            "answer": "<the correct answer>",
+            "explanation": "<one-sentence rationale>",
+            "difficulty": "easy" | "medium" | "hard"
+          }}
+        ]
+      }}
 
   audio_text_to_speech:
     # Gemini TTS path. Voice preset is a placeholder — needs sign-off from
@@ -494,6 +523,35 @@ capabilities:
       Constraints:
       - No watermarks, signatures, or overlaid text unless explicitly requested.
       - Content must be factually accurate and age-appropriate for the target audience.
+    # Optional comprehension questions generated from the resulting image
+    # (off by default, toggled in the UI) -- a text-out call via Gemini's
+    # multimodal understanding, not routable through Azure OpenAI.
+    question_model: gemini-2.5-flash
+    available_text_models: [gemini-2.5-flash, gemini-2.5-pro]
+    default_question_count: 5
+    default_question_type: mcq      # mcq | short_answer | conceptual
+    default_level: undergraduate    # school | undergraduate | postgraduate
+    questions_instruction: |
+      You are an experienced subject-matter expert generating exam-quality
+      questions based strictly on the image provided.
+
+      Generate {count} {question_type} questions at the {level} level based
+      on what the image depicts. Do not invent details not shown in it.
+
+      Return ONLY a JSON object matching this schema:
+      {{
+        "questions": [
+          {{
+            "id": <int>,
+            "type": "<question_type>",
+            "stem": "<the question text>",
+            "options": ["A...", "B...", "C...", "D..."],   // mcq only
+            "answer": "<the correct answer>",
+            "explanation": "<one-sentence rationale>",
+            "difficulty": "easy" | "medium" | "hard"
+          }}
+        ]
+      }}
 
   audio_generate:
     # Two input modes (chosen in the UI), same pattern as
