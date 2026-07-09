@@ -336,11 +336,13 @@ def _questions_toggle_form(key_prefix: str, default_count: int = 5) -> tuple[boo
     if want_questions:
         cols = st.columns(3)
         count = cols[0].number_input(
-            "Number of questions", min_value=1, max_value=20, value=default_count, key=f"{key_prefix}-count"
+            "Number of questions", min_value=1, max_value=20, value=default_count, key=f"{key_prefix}-genq-count"
         )
-        qtype = cols[1].selectbox("Question type", ["mcq", "short_answer", "conceptual"], key=f"{key_prefix}-qtype")
+        qtype = cols[1].selectbox(
+            "Question type", ["mcq", "short_answer", "conceptual"], key=f"{key_prefix}-genq-qtype"
+        )
         level = cols[2].selectbox(
-            "Level", ["school", "undergraduate", "postgraduate"], index=1, key=f"{key_prefix}-level"
+            "Level", ["school", "undergraduate", "postgraduate"], index=1, key=f"{key_prefix}-genq-level"
         )
     return want_questions, int(count), qtype, level
 
