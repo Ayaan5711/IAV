@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+import requests
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -42,6 +44,8 @@ except ImportError:
     _AUDIOOP_AVAILABLE = False
 
 RECOGNITION_TIMEOUT_SECONDS = 600
+REST_TIMEOUT_SECONDS = 30
+REST_MAX_BYTES = 10 * 1024 * 1024  # Azure's short-audio REST endpoint's own cap
 
 
 class AzureSpeechUnavailable(RuntimeError):
@@ -137,10 +141,113 @@ def transcribe_file(audio_path: Path, *, language: str = "en-US") -> AzureTransc
 
         text = " ".join(segments).strip()
         logger.info("azure_speech: recognized %d segment(s), %d chars", len(segments), len(text))
-        return AzureTranscriptionResult(text=text, language=language)
     finally:
         if cleanup:
             cleanup()
+
+    if text:
+        return AzureTranscriptionResult(text=text, language=language)
+
+    logger.info(
+        "azure_speech: SDK path recognized no text -- retrying via Azure's REST endpoint "
+        "directly, declaring the real audio format explicitly (this is what a direct Postman "
+        "call against Azure does, bypassing the SDK's local AudioConfig(filename=...) WAV parsing)"
+    )
+    rest_text = _transcribe_via_rest(audio_path, language=language, key=key, region=region)
+    if rest_text:
+        logger.info("azure_speech: REST retry succeeded where the SDK path did not")
+        return AzureTranscriptionResult(text=rest_text, language=language)
+
+    return AzureTranscriptionResult(text="", language=language)
+
+
+def _wav_format_content_type(audio_path: Path) -> str | None:
+    """Reads the real WAV header (sample rate / bit depth / channels) so the
+    REST call can declare the file's actual format explicitly -- the same
+    thing a direct Postman request does. Returns None for anything the REST
+    endpoint's simple PCM content-type can't describe (e.g. non-WAV, or
+    8/24/32-bit samples), in which case the caller assumes 16kHz mono PCM.
+    """
+    try:
+        with wave.open(str(audio_path), "rb") as src:
+            channels = src.getnchannels()
+            sample_width = src.getsampwidth()
+            frame_rate = src.getframerate()
+    except (wave.Error, EOFError):
+        return None
+    if sample_width != 2 or channels not in (1, 2):
+        return None
+    return f"audio/wav; codecs=audio/pcm; samplerate={frame_rate}"
+
+
+def _transcribe_via_rest(audio_path: Path, *, language: str, key: str, region: str) -> str | None:
+    """Azure's short-audio REST endpoint, called the same way Postman would --
+    with the audio's real format declared explicitly in Content-Type, instead
+    of relying on the SDK's local WAV parsing.
+
+    Only handles a single utterance up to ~60s / 10MB (Azure's own limit on
+    this endpoint); returns None for anything larger, any network/HTTP
+    failure, or a non-success recognition status, so the caller can treat it
+    as "no better answer than the SDK path already gave."
+    """
+    try:
+        size = audio_path.stat().st_size
+    except OSError as exc:
+        logger.warning("azure_speech: could not stat %s for REST call: %s", audio_path.name, exc)
+        return None
+    if size > REST_MAX_BYTES:
+        logger.info(
+            "azure_speech: %s (%d bytes) exceeds the short-audio REST endpoint's limit, skipping REST retry",
+            audio_path.name, size,
+        )
+        return None
+
+    try:
+        raw = audio_path.read_bytes()
+    except OSError as exc:
+        logger.warning("azure_speech: could not read %s for REST call: %s", audio_path.name, exc)
+        return None
+
+    content_type = _wav_format_content_type(audio_path) or "audio/wav; codecs=audio/pcm; samplerate=16000"
+    url = f"https://{region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1"
+    headers = {
+        "Ocp-Apim-Subscription-Key": key,
+        "Content-Type": content_type,
+        "Accept": "application/json",
+    }
+    try:
+        resp = requests.post(
+            url,
+            params={"language": language, "format": "simple"},
+            headers=headers,
+            data=raw,
+            timeout=REST_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        logger.warning("azure_speech: REST call failed (%s)", exc)
+        return None
+
+    if resp.status_code != 200:
+        logger.warning(
+            "azure_speech: REST call returned HTTP %d: %s",
+            resp.status_code, resp.text[:300],
+        )
+        return None
+
+    try:
+        payload = resp.json()
+    except ValueError:
+        logger.warning("azure_speech: REST call returned a non-JSON body")
+        return None
+
+    status = payload.get("RecognitionStatus")
+    if status != "Success":
+        logger.info("azure_speech: REST recognition status=%s (no usable text)", status)
+        return None
+
+    text = (payload.get("DisplayText") or "").strip()
+    logger.info("azure_speech: REST call succeeded (content-type=%s), %d chars", content_type, len(text))
+    return text or None
 
 
 def _resample_wav_pure_python(audio_path: Path) -> tuple[Path, Callable[[], None]] | None:
