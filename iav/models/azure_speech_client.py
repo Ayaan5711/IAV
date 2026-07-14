@@ -43,6 +43,19 @@ except ImportError:
     audioop = None  # type: ignore[assignment]
     _AUDIOOP_AVAILABLE = False
 
+try:
+    # Makes `ssl` (and therefore requests/urllib3) verify against the OS's
+    # native certificate store instead of the bundled certifi list. Needed
+    # behind a corporate TLS-inspecting proxy, where Windows already trusts
+    # the proxy's injected root CA but certifi doesn't -- without this, the
+    # REST fallback below fails with CERTIFICATE_VERIFY_FAILED even though
+    # the same host is reachable fine from Postman or a browser.
+    import truststore
+    truststore.inject_into_ssl()
+    _TRUSTSTORE_ACTIVE = True
+except ImportError:
+    _TRUSTSTORE_ACTIVE = False
+
 RECOGNITION_TIMEOUT_SECONDS = 600
 REST_TIMEOUT_SECONDS = 30
 REST_MAX_BYTES = 10 * 1024 * 1024  # Azure's short-audio REST endpoint's own cap
@@ -223,6 +236,18 @@ def _transcribe_via_rest(audio_path: Path, *, language: str, key: str, region: s
             data=raw,
             timeout=REST_TIMEOUT_SECONDS,
         )
+    except requests.exceptions.SSLError as exc:
+        if _TRUSTSTORE_ACTIVE:
+            logger.warning("azure_speech: REST call failed with a certificate error even with truststore active: %s", exc)
+        else:
+            logger.warning(
+                "azure_speech: REST call failed with a certificate verification error (%s). This is "
+                "typical behind a corporate TLS-inspecting proxy -- install 'truststore' "
+                "(pip install truststore) so this call trusts the same certificates Windows/Postman "
+                "already do, then restart the app.",
+                exc,
+            )
+        return None
     except requests.RequestException as exc:
         logger.warning("azure_speech: REST call failed (%s)", exc)
         return None
