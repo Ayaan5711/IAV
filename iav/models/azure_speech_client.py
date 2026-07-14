@@ -127,15 +127,27 @@ def transcribe_file(audio_path: Path, *, language: str = "en-US") -> AzureTransc
 
 
 def _ensure_wav(audio_path: Path) -> tuple[Path, Callable[[], None] | None]:
-    """Returns a WAV path Azure can read, converting via ffmpeg if needed.
+    """Normalizes to 16kHz mono 16-bit PCM WAV via ffmpeg -- always, even when
+    the upload is already named .wav.
+
+    Azure's AudioConfig(filename=...) is picky about WAV internals (sample
+    rate, bit depth, channel count), not just the container/extension. A
+    "real" .wav straight from a phone or browser recording is frequently
+    44.1kHz stereo or another variant Azure's audio pipeline won't parse --
+    it doesn't raise an error, it just silently recognizes zero segments.
+    Trusting the extension let exactly that slip through; always
+    normalizing is what actually guarantees a format Azure can read.
 
     Returns (path, cleanup) -- cleanup removes any temp file created here;
-    None when the original file was already used directly.
+    None when the original file was used directly (only on ffmpeg failure).
     """
-    if audio_path.suffix.lower() == ".wav":
-        return audio_path, None
-
     if not shutil.which("ffmpeg"):
+        if audio_path.suffix.lower() == ".wav":
+            logger.warning(
+                "azure_speech: ffmpeg not on PATH -- using the uploaded WAV as-is, "
+                "which may not recognize correctly if its internals aren't 16kHz mono PCM"
+            )
+            return audio_path, None
         raise AzureSpeechUnavailable(
             f"Input is {audio_path.suffix} but ffmpeg is not on PATH to convert it for Azure Speech."
         )
@@ -151,6 +163,9 @@ def _ensure_wav(audio_path: Path) -> tuple[Path, Callable[[], None] | None]:
     if proc.returncode != 0 or not out_path.exists():
         shutil.rmtree(tmp_dir, ignore_errors=True)
         stderr_tail = (proc.stderr or b"").decode("utf-8", errors="replace")[-500:]
+        if audio_path.suffix.lower() == ".wav":
+            logger.warning("azure_speech: ffmpeg normalization failed, using uploaded WAV as-is: %s", stderr_tail)
+            return audio_path, None
         raise AzureSpeechUnavailable(f"ffmpeg conversion to WAV failed: {stderr_tail}")
 
     def _cleanup() -> None:
