@@ -98,6 +98,15 @@ def transcribe_file(audio_path: Path, *, language: str = "en-US") -> AzureTransc
             result = evt.result  # type: ignore[attr-defined]
             if result.reason == speechsdk.ResultReason.RecognizedSpeech and result.text:
                 segments.append(result.text)
+            elif result.reason == speechsdk.ResultReason.NoMatch:
+                no_match = speechsdk.NoMatchDetails.from_result(result)
+                logger.warning(
+                    "azure_speech: NoMatch on a segment -- reason=%s (audio reached Azure fine, "
+                    "it just didn't detect recognizable speech in it)",
+                    no_match.reason,
+                )
+            else:
+                logger.warning("azure_speech: unexpected result.reason=%s on a segment", result.reason)
 
         def _on_canceled(evt: object) -> None:
             if evt.reason == speechsdk.CancellationReason.Error:  # type: ignore[attr-defined]
@@ -183,9 +192,12 @@ def _resample_wav_pure_python(audio_path: Path) -> tuple[Path, Callable[[], None
     def _cleanup() -> None:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    duration_s = (len(frames) / (sample_width * channels)) / frame_rate if frame_rate else 0
+    peak = audioop.max(frames, sample_width) if frames else 0
     logger.info(
-        "azure_speech: resampled %s to 16kHz mono via pure-Python audioop (no ffmpeg needed)",
-        audio_path.name,
+        "azure_speech: resampled %s to 16kHz mono via pure-Python audioop (no ffmpeg needed) -- "
+        "duration=%.2fs, peak_amplitude=%d/32768 (near 0 means the audio is effectively silent)",
+        audio_path.name, duration_s, peak,
     )
     return out_path, _cleanup
 
