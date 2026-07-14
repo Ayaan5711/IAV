@@ -99,16 +99,31 @@ class AudioToAudio(Capability):
                 logger.info("audio_to_audio: transcribing via Azure Speech (language=%s)", language)
                 try:
                     azure_result = azure_speech_client.transcribe_file(source, language=language)
-                    transcript = azure_result.text
-                    asr_engine = f"Azure Speech ({language})"
                 except azure_speech_client.AzureSpeechUnavailable as exc:
                     raise AudioToAudioError(f"Azure Speech transcription failed: {exc}") from exc
+                transcript = (azure_result.text or "").strip()
+                asr_engine = f"Azure Speech ({language})"
+                if not transcript:
+                    raise AudioToAudioError(
+                        f"Azure Speech recognized no speech using language '{language}'. The most "
+                        "common cause is a language mismatch -- double-check the Spoken language "
+                        "dropdown actually matches what's spoken in the recording. You can also "
+                        "switch the Transcription engine to Gemini, which auto-detects the "
+                        "spoken language instead of requiring it upfront."
+                    )
             elif asr_choice == "auto" and azure_speech_client.is_configured():
                 logger.info("audio_to_audio: transcribing via Azure Speech (language=%s)", language)
                 try:
                     azure_result = azure_speech_client.transcribe_file(source, language=language)
-                    transcript = azure_result.text
-                    asr_engine = f"Azure Speech ({language})"
+                    candidate = (azure_result.text or "").strip()
+                    if candidate:
+                        transcript = candidate
+                        asr_engine = f"Azure Speech ({language})"
+                    else:
+                        logger.warning(
+                            "audio_to_audio: Azure Speech recognized no text (language=%s, likely a "
+                            "language mismatch) -- falling back to Gemini ASR", language,
+                        )
                 except azure_speech_client.AzureSpeechUnavailable as exc:
                     logger.warning("Azure Speech transcription failed, falling back to Gemini ASR: %s", exc)
             elif asr_choice == "gemini":
