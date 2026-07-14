@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -32,6 +33,13 @@ try:
 except ImportError:
     speechsdk = None  # type: ignore[assignment]
     _SDK_AVAILABLE = False
+
+try:
+    import audioop
+    _AUDIOOP_AVAILABLE = True
+except ImportError:
+    audioop = None  # type: ignore[assignment]
+    _AUDIOOP_AVAILABLE = False
 
 RECOGNITION_TIMEOUT_SECONDS = 600
 
@@ -126,26 +134,88 @@ def transcribe_file(audio_path: Path, *, language: str = "en-US") -> AzureTransc
             cleanup()
 
 
-def _ensure_wav(audio_path: Path) -> tuple[Path, Callable[[], None] | None]:
-    """Normalizes to 16kHz mono 16-bit PCM WAV via ffmpeg -- always, even when
-    the upload is already named .wav.
+def _resample_wav_pure_python(audio_path: Path) -> tuple[Path, Callable[[], None]] | None:
+    """Resamples a real WAV file to 16kHz mono 16-bit PCM using only the
+    standard library (wave + audioop) -- no ffmpeg required.
 
-    Azure's AudioConfig(filename=...) is picky about WAV internals (sample
-    rate, bit depth, channel count), not just the container/extension. A
-    "real" .wav straight from a phone or browser recording is frequently
-    44.1kHz stereo or another variant Azure's audio pipeline won't parse --
-    it doesn't raise an error, it just silently recognizes zero segments.
-    Trusting the extension let exactly that slip through; always
-    normalizing is what actually guarantees a format Azure can read.
+    This is what Azure's AudioConfig(filename=...) reliably supports;
+    Gemini's own TTS output is 24kHz, which is outside that and is exactly
+    what silently produced zero recognized segments. Returns None (caller
+    should fall back to ffmpeg) if audioop isn't available, the file isn't
+    readable as WAV, or the sample width isn't the common 16-bit case.
+    """
+    if not _AUDIOOP_AVAILABLE:
+        return None
+    try:
+        with wave.open(str(audio_path), "rb") as src:
+            channels = src.getnchannels()
+            sample_width = src.getsampwidth()
+            frame_rate = src.getframerate()
+            frames = src.readframes(src.getnframes())
+    except (wave.Error, EOFError) as exc:
+        logger.warning("azure_speech: could not read %s as WAV for resampling: %s", audio_path.name, exc)
+        return None
+
+    if frame_rate == 16000 and channels == 1 and sample_width == 2:
+        return None  # already the format Azure wants -- nothing to do
+    if sample_width != 2:
+        logger.warning(
+            "azure_speech: unsupported sample width %d for pure-Python resampling, skipping",
+            sample_width,
+        )
+        return None
+
+    if channels == 2:
+        frames = audioop.tomono(frames, sample_width, 0.5, 0.5)
+        channels = 1
+    if frame_rate != 16000:
+        frames, _ = audioop.ratecv(frames, sample_width, channels, frame_rate, 16000, None)
+        frame_rate = 16000
+
+    tmp_dir = tempfile.mkdtemp(prefix="iav-azure-speech-")
+    out_path = Path(tmp_dir) / "resampled.wav"
+    with wave.open(str(out_path), "wb") as out:
+        out.setnchannels(channels)
+        out.setsampwidth(sample_width)
+        out.setframerate(frame_rate)
+        out.writeframes(frames)
+
+    def _cleanup() -> None:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    logger.info(
+        "azure_speech: resampled %s to 16kHz mono via pure-Python audioop (no ffmpeg needed)",
+        audio_path.name,
+    )
+    return out_path, _cleanup
+
+
+def _ensure_wav(audio_path: Path) -> tuple[Path, Callable[[], None] | None]:
+    """Normalizes to 16kHz mono 16-bit PCM WAV -- what Azure's
+    AudioConfig(filename=...) reliably supports.
+
+    Azure is picky about WAV internals (sample rate, bit depth, channel
+    count), not just the container/extension -- it doesn't raise an error
+    on a mismatch, it just silently recognizes zero segments. Real .wav
+    uploads and Gemini's own 24kHz TTS output both commonly fall outside
+    what it wants. Tries a pure-Python resample first (no ffmpeg needed);
+    falls back to ffmpeg for non-WAV input or anything the pure-Python
+    path can't handle.
 
     Returns (path, cleanup) -- cleanup removes any temp file created here;
-    None when the original file was used directly (only on ffmpeg failure).
+    None when the original file was used directly.
     """
+    if audio_path.suffix.lower() == ".wav":
+        resampled = _resample_wav_pure_python(audio_path)
+        if resampled is not None:
+            return resampled
+
     if not shutil.which("ffmpeg"):
         if audio_path.suffix.lower() == ".wav":
             logger.warning(
-                "azure_speech: ffmpeg not on PATH -- using the uploaded WAV as-is, "
-                "which may not recognize correctly if its internals aren't 16kHz mono PCM"
+                "azure_speech: ffmpeg not on PATH and pure-Python resampling wasn't applicable -- "
+                "using the uploaded WAV as-is, which may not recognize correctly if its internals "
+                "aren't 16kHz mono PCM"
             )
             return audio_path, None
         raise AzureSpeechUnavailable(
