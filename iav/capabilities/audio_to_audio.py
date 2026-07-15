@@ -35,7 +35,7 @@ from typing import Any
 
 from iav.capabilities._json_utils import JsonParseError, parse_json_loose
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
-from iav.models import azure_speech_client
+from iav.models import audio_generation, azure_speech_client
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
 from iav.models.pricing import summarize_costs
@@ -66,6 +66,8 @@ class AudioToAudio(Capability):
         sample_rate = int(self._settings.get("sample_rate_hz", 24000))
         azure_deployment = self.config.azure_openai.get("default_deployment")
         engine = params.get("engine", "auto")
+        azure_voice = self._settings.get("azure_voice")
+        tts_engine = params.get("tts_engine", "auto")
         target_language = params.get("target_language") or self.config.languages.get(
             "default_output_language", "Same as input"
         )
@@ -218,24 +220,31 @@ class AudioToAudio(Capability):
 
         # Synthesise speech ---------------------------------------------------
         tts_instruction = (payload.instruction or "").strip() or None if mode != "topic" else None
-        logger.info("audio_to_audio: synthesising model=%s voice=%s script_chars=%d", tts_model, voice, len(script))
+        logger.info(
+            "audio_to_audio: synthesising model=%s voice=%s script_chars=%d tts_engine=%s",
+            tts_model, voice, len(script), tts_engine,
+        )
         try:
-            tts_result = self.client.synthesize_speech(
-                model=tts_model,
+            tts_result = audio_generation.synthesize_speech(
+                gemini_client=self.client,
+                gemini_model=tts_model,
                 script=script,
+                label="synthesize",
                 voice_preset=voice,
                 instruction=tts_instruction,
+                azure_voice=azure_voice,
+                engine=tts_engine,
             )
-        except GeminiCallError as exc:
-            raise AudioToAudioError(f"Gemini TTS call failed: {exc}") from exc
-        calls.append({"label": "synthesize", "model": tts_model, "usage": tts_result.usage})
+        except audio_generation.AudioSynthesisError as exc:
+            raise AudioToAudioError(str(exc)) from exc
+        calls.append(tts_result.call_record)
 
-        if not tts_result.audio_bytes:
-            note = (tts_result.text or "").strip() or "(no detail)"
-            raise AudioToAudioError(f"TTS returned no audio. Model said: {note}")
-
-        wav_bytes = _wrap_pcm_as_wav(tts_result.audio_bytes, sample_rate=sample_rate)
-        duration_seconds = _pcm_duration_seconds(tts_result.audio_bytes, sample_rate=sample_rate)
+        if tts_result.is_raw_pcm:
+            wav_bytes = _wrap_pcm_as_wav(tts_result.audio_bytes, sample_rate=sample_rate)
+            duration_seconds = _pcm_duration_seconds(tts_result.audio_bytes, sample_rate=sample_rate)
+        else:
+            wav_bytes = tts_result.audio_bytes
+            duration_seconds = audio_generation.wav_duration_seconds(wav_bytes)
         output_path = save_output(data=wav_bytes, suffix=".wav", capability=self.name)
 
         # Generate comprehension questions from the script (optional) ---------
@@ -291,6 +300,7 @@ class AudioToAudio(Capability):
                 "question_model": question_model,
                 "tts_model": tts_model,
                 "voice": voice,
+                "tts_engine": tts_result.engine,
                 "raw_transcript": raw_transcript,
                 "cleaned_script": script,
                 "duration_seconds": duration_seconds,

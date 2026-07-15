@@ -117,6 +117,15 @@ pricing:
       unit: per_image
       rate_per_image: 0.04
 
+    # Azure Neural TTS bills per character of input text, not per token --
+    # this is a synthetic "model" key (not a real deployment name) shared by
+    # every Azure Speech synthesis call regardless of which voice was used.
+    # Public list-price estimate, unconfirmed against your Azure agreement.
+    azure-neural-tts:
+      verified: false
+      unit: per_million_chars
+      rate_per_million_chars: 16.00
+
 # Single place for every language option in the app -- input (Azure Speech
 # ASR locale, used only for transcription accuracy) and output (the
 # language narration/content ends up in -- an instruction to the text
@@ -244,6 +253,11 @@ capabilities:
     available_tts_models: [gemini-2.5-flash-preview-tts, gemini-2.5-pro-preview-tts]
     voice_preset: Kore
     available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
+    # Azure Neural TTS voice, used when the TTS engine selector picks Azure
+    # (or falls back to it in Auto mode) -- single-voice only, so multi-
+    # speaker narration always uses Gemini regardless of this setting.
+    azure_voice: en-US-JennyNeural
+    available_azure_voices: [en-US-JennyNeural, en-US-GuyNeural, en-GB-SoniaNeural, en-IN-NeerjaNeural, en-IN-PrabhatNeural]
     sample_rate_hz: 24000
     default_question_count: 5
     default_question_type: mcq      # mcq | short_answer | conceptual
@@ -359,6 +373,11 @@ capabilities:
     available_models: [gemini-2.5-flash-preview-tts, gemini-2.5-pro-preview-tts]
     voice_preset: Kore
     available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
+    # Azure Neural TTS voice, used when the TTS engine selector picks Azure
+    # (or falls back to it in Auto mode) -- single-voice only, so multi-
+    # speaker narration always uses Gemini regardless of this setting.
+    azure_voice: en-US-JennyNeural
+    available_azure_voices: [en-US-JennyNeural, en-US-GuyNeural, en-GB-SoniaNeural, en-IN-NeerjaNeural, en-IN-PrabhatNeural]
     output_format: wav
     sample_rate_hz: 24000
     default_instruction: |
@@ -382,6 +401,11 @@ capabilities:
     available_tts_models: [gemini-2.5-flash-preview-tts, gemini-2.5-pro-preview-tts]
     voice_preset: Kore
     available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
+    # Azure Neural TTS voice, used when the TTS engine selector picks Azure
+    # (or falls back to it in Auto mode) -- single-voice only, so multi-
+    # speaker narration always uses Gemini regardless of this setting.
+    azure_voice: en-US-JennyNeural
+    available_azure_voices: [en-US-JennyNeural, en-US-GuyNeural, en-GB-SoniaNeural, en-IN-NeerjaNeural, en-IN-PrabhatNeural]
     output_format: wav
     sample_rate_hz: 24000
     cleanup_transcript: true
@@ -660,6 +684,11 @@ capabilities:
     available_text_models: [gemini-2.5-flash, gemini-2.5-pro]
     voice_preset: Kore
     available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
+    # Azure Neural TTS voice, used when the TTS engine selector picks Azure
+    # (or falls back to it in Auto mode) -- single-voice only, so multi-
+    # speaker narration always uses Gemini regardless of this setting.
+    azure_voice: en-US-JennyNeural
+    available_azure_voices: [en-US-JennyNeural, en-US-GuyNeural, en-GB-SoniaNeural, en-IN-NeerjaNeural, en-IN-PrabhatNeural]
     sample_rate_hz: 24000
     # Gemini TTS always returns raw PCM, wrapped as WAV. mp3 is a real
     # conversion via ffmpeg (same dependency video_enhance already needs),

@@ -110,6 +110,23 @@ def _image_engine_selectbox(key: str) -> str:
     return _IMAGE_ENGINE_LABELS[choice]
 
 
+_TTS_ENGINE_LABELS = {
+    "Auto (Azure Speech primary, Gemini fallback)": "auto",
+    "Gemini only": "gemini",
+    "Azure Speech only": "azure",
+}
+
+
+def _tts_engine_selectbox(key: str, *, disabled: bool = False) -> str:
+    choice = st.selectbox(
+        "TTS engine", list(_TTS_ENGINE_LABELS.keys()), key=key, disabled=disabled,
+        help="Azure Neural TTS is single-voice only -- multi-speaker narration always uses Gemini "
+             "regardless of this setting. Falls back to Gemini automatically if Azure isn't "
+             "configured or a call fails.",
+    )
+    return _TTS_ENGINE_LABELS[choice]
+
+
 def _idx(options: list | None, value: Any) -> int:
     if not options:
         return 0
@@ -706,6 +723,7 @@ def _audio_to_audio_tab() -> None:
         )
         voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
         voice = st.selectbox("Voice", voices, index=_idx(voices, s.get("voice_preset")), key="a2a-voice")
+        tts_engine = _tts_engine_selectbox("a2a-ttsengine")
 
     if st.button("Process", type="primary", key="a2a-go"):
         if mode == "upload" and uploaded is None:
@@ -726,6 +744,7 @@ def _audio_to_audio_tab() -> None:
                     "tts_model": tts_model,
                     "engine": engine,
                     "voice": voice,
+                    "tts_engine": tts_engine,
                     "target_language": target_language,
                     "generate_questions": generate_questions,
                     "count": int(count),
@@ -776,6 +795,8 @@ def _render_audio_to_audio_output(result) -> None:  # type: ignore[no-untyped-de
         st.caption(f"Transcribed via: {meta['asr_engine']}")
         if "fallback" in meta["asr_engine"]:
             st.caption("ℹ Azure Speech was unavailable for this run — used the Gemini ASR fallback.")
+    if meta.get("tts_engine"):
+        st.caption(f"Narrated via: {meta['tts_engine']}")
     target_language = meta.get("target_language")
     if target_language and target_language != "Same as input":
         st.caption(f"🌐 Translated into {target_language} before narration.")
@@ -868,6 +889,9 @@ def _audio_questions_tab() -> None:
             height=80,
             key="aq-instruction",
         )
+        tts_engine = _tts_engine_selectbox("aq-ttsengine", disabled=multi_speaker)
+        if multi_speaker:
+            st.caption("Multi-speaker narration always uses Gemini — the engine choice above is ignored.")
 
     if st.button("Process", type="primary", key="aq-go"):
         if not (text_input or "").strip():
@@ -891,6 +915,7 @@ def _audio_questions_tab() -> None:
                             "engine": engine,
                             "target_language": target_language,
                             "voice": voice,
+                            "tts_engine": tts_engine,
                             "multi_speaker": multi_speaker,
                             "accent": accent,
                             "speed": speed,
@@ -917,6 +942,8 @@ def _render_audio_questions_output(result) -> None:  # type: ignore[no-untyped-d
     st.success(f"Done — generated {meta.get('question_count', '?')} questions.")
     if meta.get("duration_seconds"):
         st.metric("Audio duration", f"{meta['duration_seconds']:.1f}s")
+    if meta.get("tts_engine"):
+        st.caption(f"Narrated via: {meta['tts_engine']}")
     target_language = meta.get("target_language")
     if target_language and target_language != "Same as input":
         st.caption(f"🌐 Translated into {target_language} before narration.")
@@ -1118,6 +1145,9 @@ def _generate_audio_tab() -> None:
         output_format = cols4[1].selectbox(
             "Output format", formats, index=_idx(formats, s.get("output_format")), key="ga-fmt"
         )
+        tts_engine = _tts_engine_selectbox("ga-ttsengine", disabled=multi_speaker)
+        if multi_speaker:
+            st.caption("Multi-speaker narration always uses Gemini — the engine choice above is ignored.")
 
     if st.button("Generate", type="primary", key="ga-go"):
         errors = validate_common_attributes(common) + validate_free_text(free_text)
@@ -1146,6 +1176,7 @@ def _generate_audio_tab() -> None:
                             "text_model": text_model,
                             "engine": engine,
                             "voice": voice,
+                            "tts_engine": tts_engine,
                             "output_format": output_format,
                         },
                     )
@@ -1161,6 +1192,8 @@ def _generate_audio_tab() -> None:
                     "Download", data=fh.read(), file_name=result.file_path.name,
                     mime=result.metadata.get("mime_type", "audio/wav"),
                 )
+            if result.metadata.get("tts_engine"):
+                st.caption(f"Narrated via: {result.metadata['tts_engine']}")
             if result.metadata.get("format_note"):
                 st.caption(f"ℹ {result.metadata['format_note']}")
             if result.metadata.get("mode") == "topic":

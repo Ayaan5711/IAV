@@ -386,3 +386,46 @@ def _ensure_wav(audio_path: Path) -> tuple[Path, Callable[[], None] | None]:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     return out_path, _cleanup
+
+
+def synthesize_speech(text: str, *, voice: str) -> bytes:
+    """Text-to-speech via Azure Neural TTS. Returns a complete 24kHz mono
+    16-bit PCM WAV file (RIFF header included) -- unlike Gemini's TTS, which
+    returns raw PCM the caller has to wrap itself, this is already a
+    ready-to-write WAV container.
+
+    Single-voice only -- Azure Neural TTS here doesn't do the multi-speaker
+    dialogue Gemini's TTS supports; callers should route multi-speaker
+    requests to Gemini regardless of the selected engine.
+    """
+    if not _SDK_AVAILABLE:
+        raise AzureSpeechUnavailable("azure-cognitiveservices-speech is not installed.")
+
+    key = os.environ.get("AZURE_SPEECH_KEY")
+    region = os.environ.get("AZURE_SPEECH_REGION")
+    if not key or not region:
+        raise AzureSpeechUnavailable("AZURE_SPEECH_KEY / AZURE_SPEECH_REGION are not set.")
+
+    speech_config = speechsdk.SpeechConfig(subscription=key, region=region)
+    speech_config.speech_synthesis_voice_name = voice
+    speech_config.set_speech_synthesis_output_format(
+        speechsdk.SpeechSynthesisOutputFormat.Riff24Khz16BitMonoPcm
+    )
+    # audio_config=None -- return the audio in-memory instead of playing it
+    # to a speaker or writing it to a file, since this runs headless.
+    synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=None)
+
+    logger.info("azure_speech: synthesizing speech (voice=%s, chars=%d)", voice, len(text))
+    result = synthesizer.speak_text_async(text).get()
+
+    if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+        audio_bytes = result.audio_data
+        logger.info("azure_speech: synthesis completed (%d bytes)", len(audio_bytes))
+        return audio_bytes
+
+    if result.reason == speechsdk.ResultReason.Canceled:
+        details = result.cancellation_details
+        raise AzureSpeechUnavailable(
+            f"Azure Speech synthesis canceled: {details.reason} -- {details.error_details}"
+        )
+    raise AzureSpeechUnavailable(f"Azure Speech synthesis failed: reason={result.reason}")
