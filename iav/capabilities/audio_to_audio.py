@@ -35,7 +35,7 @@ from typing import Any
 
 from iav.capabilities._json_utils import JsonParseError, parse_json_loose
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
-from iav.models import azure_speech_client
+from iav.models import audio_generation, azure_speech_client
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
 from iav.models.pricing import summarize_costs
@@ -66,6 +66,8 @@ class AudioToAudio(Capability):
         sample_rate = int(self._settings.get("sample_rate_hz", 24000))
         azure_deployment = self.config.azure_openai.get("default_deployment")
         engine = params.get("engine", "auto")
+        azure_voice = self._settings.get("azure_voice")
+        tts_engine = params.get("tts_engine", "auto")
         target_language = params.get("target_language") or self.config.languages.get(
             "default_output_language", "Same as input"
         )
@@ -87,20 +89,53 @@ class AudioToAudio(Capability):
                 raise FileNotFoundError(f"Input audio not found: {source}")
             audio_bytes = source.read_bytes()
             language = params.get("language") or self.config.languages.get("default_input_locale", "en-US")
+            asr_choice = (params.get("asr_engine") or "auto").lower()  # "auto" | "gemini" | "azure"
 
             transcript = None
-            if azure_speech.is_configured():
+            if asr_choice == "azure":
+                if not azure_speech_client.is_configured():
+                    raise AudioToAudioError(
+                        "Azure Speech was selected but isn't configured "
+                        "(AZURE_SPEECH_KEY / AZURE_SPEECH_REGION)."
+                    )
                 logger.info("audio_to_audio: transcribing via Azure Speech (language=%s)", language)
                 try:
-                    azure_result = azure_speech.transcribe_file(source, language=language)
-                    transcript = azure_result.text
-                    asr_engine = f"Azure Speech ({language})"
-                except azure_speech.AzureSpeechUnavailable as exc:
+                    azure_result = azure_speech_client.transcribe_file(source, language=language)
+                except azure_speech_client.AzureSpeechUnavailable as exc:
+                    raise AudioToAudioError(f"Azure Speech transcription failed: {exc}") from exc
+                transcript = (azure_result.text or "").strip()
+                asr_engine = f"Azure Speech ({language})"
+                if not transcript:
+                    raise AudioToAudioError(
+                        f"Azure Speech recognized no speech using language '{language}'. The most "
+                        "common cause is a language mismatch -- double-check the Spoken language "
+                        "dropdown actually matches what's spoken in the recording. You can also "
+                        "switch the Transcription engine to Gemini, which auto-detects the "
+                        "spoken language instead of requiring it upfront."
+                    )
+            elif asr_choice == "auto" and azure_speech_client.is_configured():
+                logger.info("audio_to_audio: transcribing via Azure Speech (language=%s)", language)
+                try:
+                    azure_result = azure_speech_client.transcribe_file(source, language=language)
+                    candidate = (azure_result.text or "").strip()
+                    if candidate:
+                        transcript = candidate
+                        asr_engine = f"Azure Speech ({language})"
+                    else:
+                        logger.warning(
+                            "audio_to_audio: Azure Speech recognized no text (language=%s, likely a "
+                            "language mismatch) -- falling back to Gemini ASR", language,
+                        )
+                except azure_speech_client.AzureSpeechUnavailable as exc:
                     logger.warning("Azure Speech transcription failed, falling back to Gemini ASR: %s", exc)
+            elif asr_choice == "gemini":
+                logger.info("audio_to_audio: Gemini selected explicitly for transcription")
             else:
                 logger.info("audio_to_audio: Azure Speech not configured, using Gemini ASR")
 
             if transcript is None:
+                # Gemini has no language parameter here -- it auto-detects the
+                # spoken language directly from the audio itself.
                 mime_type = _guess_audio_mime(source)
                 try:
                     asr_result = self.client.transcribe_audio(
@@ -111,9 +146,10 @@ class AudioToAudio(Capability):
                     )
                 except GeminiCallError as exc:
                     raise AudioToAudioError(f"Gemini ASR call failed: {exc}") from exc
-                calls.append({"label": "transcribe (Gemini fallback)", "model": question_model, "usage": asr_result.usage})
+                label = "transcribe (Gemini fallback)" if asr_choice == "auto" else "transcribe (Gemini)"
+                calls.append({"label": label, "model": question_model, "usage": asr_result.usage})
                 transcript = (asr_result.text or "").strip()
-                asr_engine = f"Gemini ASR fallback ({question_model})"
+                asr_engine = f"Gemini ASR ({question_model})" if asr_choice == "gemini" else f"Gemini ASR fallback ({question_model})"
 
             transcript = (transcript or "").strip()
             if not transcript:
@@ -184,24 +220,31 @@ class AudioToAudio(Capability):
 
         # Synthesise speech ---------------------------------------------------
         tts_instruction = (payload.instruction or "").strip() or None if mode != "topic" else None
-        logger.info("audio_to_audio: synthesising model=%s voice=%s script_chars=%d", tts_model, voice, len(script))
+        logger.info(
+            "audio_to_audio: synthesising model=%s voice=%s script_chars=%d tts_engine=%s",
+            tts_model, voice, len(script), tts_engine,
+        )
         try:
-            tts_result = self.client.synthesize_speech(
-                model=tts_model,
+            tts_result = audio_generation.synthesize_speech(
+                gemini_client=self.client,
+                gemini_model=tts_model,
                 script=script,
+                label="synthesize",
                 voice_preset=voice,
                 instruction=tts_instruction,
+                azure_voice=azure_voice,
+                engine=tts_engine,
             )
-        except GeminiCallError as exc:
-            raise AudioToAudioError(f"Gemini TTS call failed: {exc}") from exc
-        calls.append({"label": "synthesize", "model": tts_model, "usage": tts_result.usage})
+        except audio_generation.AudioSynthesisError as exc:
+            raise AudioToAudioError(str(exc)) from exc
+        calls.append(tts_result.call_record)
 
-        if not tts_result.audio_bytes:
-            note = (tts_result.text or "").strip() or "(no detail)"
-            raise AudioToAudioError(f"TTS returned no audio. Model said: {note}")
-
-        wav_bytes = _wrap_pcm_as_wav(tts_result.audio_bytes, sample_rate=sample_rate)
-        duration_seconds = _pcm_duration_seconds(tts_result.audio_bytes, sample_rate=sample_rate)
+        if tts_result.is_raw_pcm:
+            wav_bytes = _wrap_pcm_as_wav(tts_result.audio_bytes, sample_rate=sample_rate)
+            duration_seconds = _pcm_duration_seconds(tts_result.audio_bytes, sample_rate=sample_rate)
+        else:
+            wav_bytes = tts_result.audio_bytes
+            duration_seconds = audio_generation.wav_duration_seconds(wav_bytes)
         output_path = save_output(data=wav_bytes, suffix=".wav", capability=self.name)
 
         # Generate comprehension questions from the script (optional) ---------
@@ -257,6 +300,7 @@ class AudioToAudio(Capability):
                 "question_model": question_model,
                 "tts_model": tts_model,
                 "voice": voice,
+                "tts_engine": tts_result.engine,
                 "raw_transcript": raw_transcript,
                 "cleaned_script": script,
                 "duration_seconds": duration_seconds,

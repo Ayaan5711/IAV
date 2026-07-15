@@ -13,6 +13,7 @@ from config.yaml's available_* lists.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 import traceback
@@ -68,16 +69,39 @@ SHOW_TEXT_TO_SPEECH_TAB = False
 # ----------------------------------------------------------------------
 
 
-_ENGINE_LABELS = {
+_VENDOR_LABELS = {
     "Auto (Azure primary, Gemini fallback)": "auto",
     "Gemini only": "gemini",
-    "Azure OpenAI only": "azure",
+    "Azure only": "azure",
 }
 
 
-def _engine_selectbox(key: str, *, disabled: bool = False) -> str:
-    choice = st.selectbox("Text-generation engine", list(_ENGINE_LABELS.keys()), key=key, disabled=disabled)
-    return _ENGINE_LABELS[choice]
+def _show_vendor_selector() -> str:
+    """One global engine toggle for the whole app, not a separate dropdown
+    per capability -- production deployments pick a single vendor rather
+    than mixing Azure/Gemini per feature. Governs every text-generation,
+    image, ASR, and TTS call everywhere.
+
+    "Auto" tries Azure first per capability and falls back to Gemini
+    automatically if Azure isn't configured or a call fails. "Gemini only"
+    / "Azure only" pin everything to that one vendor -- Azure only fails
+    loudly (no silent fallback) since it was explicitly requested, the one
+    exception being multi-speaker TTS, which always needs Gemini since
+    Azure Neural TTS here is single-voice only.
+    """
+    with st.sidebar:
+        st.divider()
+        st.markdown("### Vendor")
+        choice = st.selectbox(
+            "Engine (applies everywhere)", list(_VENDOR_LABELS.keys()), key="vendor-engine",
+            help="Covers text generation, image generation/editing, speech-to-text, and "
+                 "text-to-speech across every tab. Video generation has no Azure equivalent and "
+                 "always uses Gemini/Veo regardless of this setting.",
+        )
+        engine = _VENDOR_LABELS[choice]
+        if engine == "azure":
+            st.caption("⚠ Azure only: any step Azure can't do fails loudly instead of falling back to Gemini.")
+        return engine
 
 
 def _idx(options: list | None, value: Any) -> int:
@@ -123,7 +147,12 @@ def _show_session_cost() -> None:
         )
         total = st.session_state.get("session_cost_usd", 0.0)
         rate = _get_inr_rate()
-        st.metric("Total this session", f"${total:.6f}" + (f" (₹{total * rate:.2f})" if rate else ""))
+        st.metric(
+            "Total this session",
+            f"${total:.6f}",
+            delta=f"₹{total * rate:.2f}" if rate else None,
+            delta_color="off",
+        )
         st.caption("Token counts are real; dollar amounts are estimates. See Cloud Billing for actual charges.")
         if st.button("Reset session total", key="reset-session-cost"):
             st.session_state["session_cost_usd"] = 0.0
@@ -148,14 +177,14 @@ def _render_cost(metadata: dict | None) -> None:
 
     thoughts_tok = cost.get("total_thoughts_tokens", 0)
     inr_rate = _get_inr_rate()
-    inr_suffix = f" (₹{total * inr_rate:.2f})" if inr_rate else ""
-    label = f"Cost — est. ${total:.6f}{inr_suffix} ({prompt_tok:,} in / {output_tok:,} out tokens)"
+    label = f"Cost — est. ${total:.6f} ({prompt_tok:,} in / {output_tok:,} out tokens)"
     if thoughts_tok:
         label += f", {thoughts_tok:,} reasoning tokens"
     with st.expander(label, expanded=False):
         if cost.get("any_unverified"):
             st.warning("Some rates below are unverified against an official Google source.")
         if inr_rate:
+            st.metric("Total (this result)", f"${total:.6f}", delta=f"₹{total * inr_rate:.2f}", delta_color="off")
             st.caption(f"Converted at ₹{inr_rate:.2f} / $1 (rate entered manually in the sidebar).")
         for call in calls:
             badge = "verified" if call.get("verified") else "⚠ unverified"
@@ -166,8 +195,14 @@ def _render_cost(metadata: dict | None) -> None:
             cols = st.columns(4)
             cols[0].metric("Input tokens", f"{tok.get('prompt', 0):,}")
             cols[1].metric("Output tokens", f"{tok.get('output', 0):,}")
-            cols[2].metric("Input cost", f"${input_usd:.6f}" + (f" / ₹{input_usd * inr_rate:.2f}" if inr_rate else ""))
-            cols[3].metric("Output cost", f"${output_usd:.6f}" + (f" / ₹{output_usd * inr_rate:.2f}" if inr_rate else ""))
+            cols[2].metric(
+                "Input cost", f"${input_usd:.6f}",
+                delta=f"₹{input_usd * inr_rate:.2f}" if inr_rate else None, delta_color="off",
+            )
+            cols[3].metric(
+                "Output cost", f"${output_usd:.6f}",
+                delta=f"₹{output_usd * inr_rate:.2f}" if inr_rate else None, delta_color="off",
+            )
             if tok.get("thoughts") or tok.get("tool_use") or tok.get("cached"):
                 extras = []
                 if tok.get("thoughts"):
@@ -301,40 +336,139 @@ def _show_validation_errors(errors: list[str]) -> bool:
     return not errors
 
 
+def _questions_toggle_form(key_prefix: str, default_count: int = 5) -> tuple[bool, int, str, str]:
+    """Optional 'generate comprehension questions' checkbox + count/type/level.
+
+    Shared across every tab that can optionally quiz on its own output.
+    """
+    want_questions = st.checkbox(
+        "Also generate comprehension questions from this content", value=False, key=f"{key_prefix}-genq"
+    )
+    count, qtype, level = default_count, "mcq", "undergraduate"
+    if want_questions:
+        cols = st.columns(3)
+        count = cols[0].number_input(
+            "Number of questions", min_value=1, max_value=20, value=default_count, key=f"{key_prefix}-genq-count"
+        )
+        qtype = cols[1].selectbox(
+            "Question type", ["mcq", "short_answer", "conceptual"], key=f"{key_prefix}-genq-qtype"
+        )
+        level = cols[2].selectbox(
+            "Level", ["school", "undergraduate", "postgraduate"], index=1, key=f"{key_prefix}-genq-level"
+        )
+    return want_questions, int(count), qtype, level
+
+
+def _render_questions_block(meta: dict, data, key_prefix: str) -> None:
+    """Renders the optional questions JSON + download button, if any were generated."""
+    if not meta.get("generate_questions") or not data:
+        return
+    with st.expander(f"Questions ({meta.get('question_count', '?')})"):
+        st.json(data)
+    q_path = meta.get("questions_json_path")
+    if q_path and Path(q_path).exists():
+        with Path(q_path).open("rb") as fh:
+            st.download_button(
+                "Download questions JSON", data=fh.read(), file_name=Path(q_path).name,
+                mime="application/json", key=f"{key_prefix}-dlq",
+            )
+
+
 # ----------------------------------------------------------------------
 # Transform Existing Content — enhance/analyse SME-supplied material
 # ----------------------------------------------------------------------
 
 
-def _image_enhance_options() -> dict:
-    s = load_config().capability("image_enhance")
-    cols = st.columns(2)
-    models = s.get("available_models") or [s["model"]]
-    model = cols[0].selectbox("Model", models, index=_idx(models, s["model"]), key="ie-model")
-    resolutions = s.get("available_resolutions") or [s.get("resolution", "2K")]
-    resolution = cols[1].selectbox(
-        "Resolution", resolutions, index=_idx(resolutions, s.get("resolution")), key="ie-res"
+def _image_enhance_tab() -> None:
+    """Hand-drawn diagram -> professional render, with optional questions."""
+    st.subheader("Image — hand-drawn diagram → professional render")
+    st.caption(
+        "Upload an SME's hand-drawn diagram. Labels, numbers, and geometric "
+        "relationships are preserved exactly."
     )
-    return {"model": model, "resolution": resolution}
 
+    s = load_config().capability("image_enhance")
 
-def _run_image(saved: Path, instruction: str, params: dict):
-    cap = ImageEnhance()
-    return cap.process(CapabilityInput(file_path=saved, instruction=instruction, params=params))
+    uploaded = st.file_uploader("Upload file", type=["png", "jpg", "jpeg", "webp"], key="ie-upload")
+    instruction = st.text_area(
+        "Instruction (optional — leave blank to use the default)",
+        value="",
+        placeholder=(
+            "Re-render this hand-drawn diagram as a clean, professional illustration. "
+            "Preserve every label, number, and geometric relationship exactly."
+        ),
+        height=100,
+        key="ie-instruction",
+    )
 
+    want_questions, q_count, q_type, q_level = _questions_toggle_form(
+        "ie", default_count=int(s.get("default_question_count", 5))
+    )
 
-def _render_image_output(result) -> None:  # type: ignore[no-untyped-def]
-    out_path: Path = result.file_path
-    st.success("Done.")
-    st.image(str(out_path), caption=out_path.name)
-    with out_path.open("rb") as fh:
-        st.download_button(
-            "Download",
-            data=fh.read(),
-            file_name=out_path.name,
-            mime=result.metadata.get("mime_type", "image/png"),
+    with st.expander("Model & resolution", expanded=False):
+        cols = st.columns(2)
+        models = s.get("available_models") or [s["model"]]
+        model = cols[0].selectbox("Model", models, index=_idx(models, s["model"]), key="ie-model")
+        resolutions = s.get("available_resolutions") or [s.get("resolution", "2K")]
+        resolution = cols[1].selectbox(
+            "Resolution", resolutions, index=_idx(resolutions, s.get("resolution")), key="ie-res"
         )
-    _render_cost(result.metadata)
+        text_models = s.get("available_text_models") or [s.get("question_model", model)]
+        question_model = st.selectbox(
+            "Question-generation model", text_models, index=_idx(text_models, s.get("question_model")),
+            key="ie-qmodel", disabled=not want_questions,
+        )
+    image_engine = VENDOR_ENGINE
+
+    if st.button("Process", type="primary", key="ie-go"):
+        if uploaded is None:
+            st.warning("Upload a file first.")
+            return
+        logger.info("Image: Process clicked")
+        try:
+            with st.spinner("Working…"):
+                start = time.perf_counter()
+                suffix = Path(uploaded.name).suffix or ""
+                saved = save_input(uploaded.getvalue(), suffix)
+                cap = ImageEnhance()
+                result = cap.process(
+                    CapabilityInput(
+                        file_path=saved,
+                        instruction=instruction,
+                        params={
+                            "model": model,
+                            "resolution": resolution,
+                            "generate_questions": want_questions,
+                            "question_model": question_model,
+                            "count": q_count,
+                            "type": q_type,
+                            "level": q_level,
+                            "image_engine": image_engine,
+                        },
+                    )
+                )
+                elapsed = time.perf_counter() - start
+            _render_time_taken(elapsed)
+            st.success("Done.")
+            st.image(str(result.file_path), caption=result.file_path.name)
+            if result.metadata.get("image_engine"):
+                st.caption(f"Rendered via: {result.metadata['image_engine']}")
+            if result.metadata.get("revised_prompt"):
+                with st.expander("⚠ Azure rewrote this instruction before rendering"):
+                    st.caption("DALL-E-3 rewrites prompts internally before rendering — this is what it actually used.")
+                    st.text(result.metadata["revised_prompt"])
+            with result.file_path.open("rb") as fh:
+                st.download_button(
+                    "Download", data=fh.read(), file_name=result.file_path.name,
+                    mime=result.metadata.get("mime_type", "image/png"),
+                )
+            _render_questions_block(result.metadata, result.data, "ie")
+            _render_cost(result.metadata)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Image: Process failed")
+            st.error(f"Failed: {exc}")
+            with st.expander("Traceback"):
+                st.code(traceback.format_exc())
 
 
 def _tts_options() -> dict:
@@ -502,6 +636,7 @@ def _audio_to_audio_tab() -> None:
     language = None
     length = None
 
+    asr_engine = VENDOR_ENGINE
     if top_mode_label == "Upload recording":
         mode = "upload"
         uploaded = st.file_uploader(
@@ -511,6 +646,9 @@ def _audio_to_audio_tab() -> None:
         language = st.selectbox(
             "Spoken language (for transcription accuracy — not translation)",
             input_locales, index=_idx(input_locales, langs.get("default_input_locale")), key="a2a-lang",
+            disabled=(asr_engine == "gemini"),
+            help="Only used by Azure Speech — Gemini auto-detects the spoken language "
+                 "directly from the audio and ignores this.",
         )
     else:
         sub_mode_label = st.radio(
@@ -543,19 +681,9 @@ def _audio_to_audio_tab() -> None:
              "\"Same as input\" skips translation entirely.",
     )
 
-    generate_questions = st.checkbox(
-        "Also generate comprehension questions from this content", value=False, key="a2a-genq"
+    generate_questions, count, qtype, level = _questions_toggle_form(
+        "a2a", default_count=int(s.get("default_question_count", 5))
     )
-    count, qtype, level = 5, "mcq", "undergraduate"
-    if generate_questions:
-        cols = st.columns(3)
-        count = cols[0].number_input(
-            "Number of questions", min_value=1, max_value=20, value=int(s.get("default_question_count", 5)), key="a2a-count"
-        )
-        qtype = cols[1].selectbox("Question type", ["mcq", "short_answer", "conceptual"], key="a2a-qtype")
-        level = cols[2].selectbox(
-            "Level", ["school", "undergraduate", "postgraduate"], index=1, key="a2a-level"
-        )
 
     with st.expander("Advanced options", expanded=False):
         cols2 = st.columns(3)
@@ -567,14 +695,10 @@ def _audio_to_audio_tab() -> None:
         tts_models = s.get("available_tts_models") or [s["tts_model"]]
         tts_model = cols2[1].selectbox("TTS model", tts_models, index=_idx(tts_models, s["tts_model"]), key="a2a-ttsmodel")
         with cols2[2]:
-            engine = _engine_selectbox("a2a-engine")
-        st.caption(
-            "The engine above applies to every text step (cleanup, content writing, "
-            "translation, question generation). \"Auto\" uses Azure OpenAI by default, "
-            "falling back to Gemini only if Azure isn't configured or a call fails."
-        )
-        voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
-        voice = st.selectbox("Voice", voices, index=_idx(voices, s.get("voice_preset")), key="a2a-voice")
+            voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
+            voice = st.selectbox("Voice", voices, index=_idx(voices, s.get("voice_preset")), key="a2a-voice")
+    engine = VENDOR_ENGINE
+    tts_engine = VENDOR_ENGINE
 
     if st.button("Process", type="primary", key="a2a-go"):
         if mode == "upload" and uploaded is None:
@@ -595,6 +719,7 @@ def _audio_to_audio_tab() -> None:
                     "tts_model": tts_model,
                     "engine": engine,
                     "voice": voice,
+                    "tts_engine": tts_engine,
                     "target_language": target_language,
                     "generate_questions": generate_questions,
                     "count": int(count),
@@ -605,7 +730,10 @@ def _audio_to_audio_tab() -> None:
                     suffix = Path(uploaded.name).suffix or ""
                     saved = save_input(uploaded.getvalue(), suffix)
                     result = cap.process(
-                        CapabilityInput(file_path=saved, params={**base_params, "language": language})
+                        CapabilityInput(
+                            file_path=saved,
+                            params={**base_params, "language": language, "asr_engine": asr_engine},
+                        )
                     )
                 else:
                     result = cap.process(
@@ -642,6 +770,8 @@ def _render_audio_to_audio_output(result) -> None:  # type: ignore[no-untyped-de
         st.caption(f"Transcribed via: {meta['asr_engine']}")
         if "fallback" in meta["asr_engine"]:
             st.caption("ℹ Azure Speech was unavailable for this run — used the Gemini ASR fallback.")
+    if meta.get("tts_engine"):
+        st.caption(f"Narrated via: {meta['tts_engine']}")
     target_language = meta.get("target_language")
     if target_language and target_language != "Same as input":
         st.caption(f"🌐 Translated into {target_language} before narration.")
@@ -654,16 +784,8 @@ def _render_audio_to_audio_output(result) -> None:  # type: ignore[no-untyped-de
     elif result.text:
         with st.expander("Script used for narration"):
             st.text(result.text)
-    if result.data:
-        with st.expander(f"Questions ({meta.get('question_count', '?')})"):
-            st.json(result.data)
-        q_path = meta.get("questions_json_path")
-        if q_path and Path(q_path).exists():
-            with Path(q_path).open("rb") as fh:
-                st.download_button(
-                    "Download questions JSON", data=fh.read(), file_name=Path(q_path).name, mime="application/json"
-                )
-    if meta.get("asr_engine", "").startswith("Azure"):
+    _render_questions_block(meta, result.data, "a2a")
+    if (meta.get("asr_engine") or "").startswith("Azure"):
         st.caption("ℹ Azure Speech transcription is billed separately by Azure — not included in the cost estimate below.")
     _render_cost(meta)
 
@@ -727,13 +849,11 @@ def _audio_questions_tab() -> None:
             "Voice (single-speaker only)", voices, index=_idx(voices, s.get("voice_preset")),
             key="aq-voice", disabled=multi_speaker,
         )
-        cols4 = st.columns(3)
+        cols4 = st.columns(2)
         accents = s.get("accents") or ["Neutral"]
         accent = cols4[0].selectbox("Accent", accents, key="aq-accent")
         speeds = s.get("speeds") or ["Normal"]
         speed = cols4[1].selectbox("Speed", speeds, key="aq-speed")
-        with cols4[2]:
-            engine = _engine_selectbox("aq-engine")
         tones = s.get("tones") or ["Neutral"]
         tone = st.selectbox("Tone", tones, key="aq-tone")
         instruction = st.text_area(
@@ -742,6 +862,10 @@ def _audio_questions_tab() -> None:
             height=80,
             key="aq-instruction",
         )
+        if multi_speaker:
+            st.caption("Multi-speaker narration always uses Gemini, regardless of the sidebar vendor setting.")
+    engine = VENDOR_ENGINE
+    tts_engine = VENDOR_ENGINE
 
     if st.button("Process", type="primary", key="aq-go"):
         if not (text_input or "").strip():
@@ -765,6 +889,7 @@ def _audio_questions_tab() -> None:
                             "engine": engine,
                             "target_language": target_language,
                             "voice": voice,
+                            "tts_engine": tts_engine,
                             "multi_speaker": multi_speaker,
                             "accent": accent,
                             "speed": speed,
@@ -791,6 +916,8 @@ def _render_audio_questions_output(result) -> None:  # type: ignore[no-untyped-d
     st.success(f"Done — generated {meta.get('question_count', '?')} questions.")
     if meta.get("duration_seconds"):
         st.metric("Audio duration", f"{meta['duration_seconds']:.1f}s")
+    if meta.get("tts_engine"):
+        st.caption(f"Narrated via: {meta['tts_engine']}")
     target_language = meta.get("target_language")
     if target_language and target_language != "Same as input":
         st.caption(f"🌐 Translated into {target_language} before narration.")
@@ -837,6 +964,31 @@ def _generate_image_tab() -> None:
         key="gi-freetext",
     )
 
+    use_label_placeholders = st.checkbox(
+        "Diagram has labelled placeholders (e.g. X, Y, Z) that questions should ask about",
+        value=False,
+        key="gi-labelmode",
+        help=(
+            "Designs a label scheme first (which parts show their real value vs. a bare "
+            "placeholder tag) and reuses it for both the image and the questions, so the two "
+            "can't disagree on labelling -- fixes duplicate/mismatched labels and questions "
+            "that ask about a part the image already reveals."
+        ),
+    )
+
+    want_questions, q_count, q_type, q_level = _questions_toggle_form(
+        "gi", default_count=int(s.get("default_question_count", 5))
+    )
+    if use_label_placeholders and want_questions:
+        st.caption("Question count/type/level above are ignored in placeholder mode — one question is generated per placeholder.")
+    if use_label_placeholders and VENDOR_ENGINE != "gemini":
+        st.caption(
+            "ℹ If this ends up rendering via Azure DALL-E-3 (see Vendor in the sidebar), its "
+            "automatic prompt-rewriting step doesn't reliably preserve exact placeholder-labelling "
+            "instructions the way Gemini or Azure gpt-image-1 does — check the render before "
+            "trusting the label placement."
+        )
+
     with st.expander("Advanced options", expanded=False):
         cols2 = st.columns(3)
         models = s.get("available_models") or [s["model"]]
@@ -845,6 +997,12 @@ def _generate_image_tab() -> None:
         resolution = cols2[1].selectbox("Resolution", resolutions, index=_idx(resolutions, s.get("resolution")), key="gi-res")
         formats = s.get("available_formats") or [s.get("output_format", "png")]
         output_format = cols2[2].selectbox("Output format", formats, index=_idx(formats, s.get("output_format")), key="gi-fmt")
+        text_models = s.get("available_text_models") or [s.get("question_model", model)]
+        question_model = st.selectbox(
+            "Question-generation model", text_models, index=_idx(text_models, s.get("question_model")),
+            key="gi-qmodel", disabled=not (want_questions or use_label_placeholders),
+        )
+    image_engine = VENDOR_ENGINE
 
     if st.button("Generate", type="primary", key="gi-go"):
         errors = validate_common_attributes(common) + validate_free_text(free_text)
@@ -868,6 +1026,13 @@ def _generate_image_tab() -> None:
                             "model": model,
                             "resolution": resolution,
                             "output_format": output_format,
+                            "generate_questions": want_questions,
+                            "question_model": question_model,
+                            "count": q_count,
+                            "type": q_type,
+                            "level": q_level,
+                            "use_label_placeholders": use_label_placeholders,
+                            "image_engine": image_engine,
                         },
                     )
                 )
@@ -875,13 +1040,29 @@ def _generate_image_tab() -> None:
             st.success("Done.")
             _render_time_taken(elapsed)
             st.image(str(result.file_path), caption=result.file_path.name)
+            if result.metadata.get("image_engine"):
+                st.caption(f"Rendered via: {result.metadata['image_engine']}")
             with result.file_path.open("rb") as fh:
                 st.download_button(
                     "Download", data=fh.read(), file_name=result.file_path.name,
                     mime=result.metadata.get("mime_type", "image/png"),
                 )
-            with st.expander("Prompt sent to Gemini"):
+            with st.expander("Prompt sent"):
                 st.text(result.metadata.get("prompt", ""))
+            if result.metadata.get("revised_prompt"):
+                with st.expander("⚠ Azure rewrote this prompt before generating"):
+                    st.caption("DALL-E-3 rewrites prompts internally before rendering — this is what it actually used.")
+                    st.text(result.metadata["revised_prompt"])
+            label_path = result.metadata.get("label_json_path")
+            if label_path and Path(label_path).exists():
+                with st.expander(f"Label key ({result.metadata.get('label_count', '?')}) — your reference, not shown in the image"):
+                    st.json(json.loads(Path(label_path).read_text(encoding="utf-8")))
+                with Path(label_path).open("rb") as fh:
+                    st.download_button(
+                        "Download label key", data=fh.read(), file_name=Path(label_path).name,
+                        mime="application/json", key="gi-dllabels",
+                    )
+            _render_questions_block(result.metadata, result.data, "gi")
             _render_cost(result.metadata)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Generate Image: failed")
@@ -936,19 +1117,20 @@ def _generate_audio_tab() -> None:
         )
         models = s.get("available_models") or [s["model"]]
         model = cols3[1].selectbox("TTS model", models, index=_idx(models, s["model"]), key="ga-model")
-        with cols3[2]:
-            engine = _engine_selectbox("ga-engine", disabled=(mode == "script"))
-
-        cols4 = st.columns(2)
         voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
-        voice = cols4[0].selectbox(
+        voice = cols3[2].selectbox(
             "Voice (single-speaker only)", voices, index=_idx(voices, s.get("voice_preset")),
             key="ga-voice", disabled=multi_speaker,
         )
+
         formats = s.get("available_formats") or [s.get("output_format", "wav")]
-        output_format = cols4[1].selectbox(
+        output_format = st.selectbox(
             "Output format", formats, index=_idx(formats, s.get("output_format")), key="ga-fmt"
         )
+        if multi_speaker:
+            st.caption("Multi-speaker narration always uses Gemini, regardless of the sidebar vendor setting.")
+    engine = VENDOR_ENGINE
+    tts_engine = VENDOR_ENGINE
 
     if st.button("Generate", type="primary", key="ga-go"):
         errors = validate_common_attributes(common) + validate_free_text(free_text)
@@ -977,6 +1159,7 @@ def _generate_audio_tab() -> None:
                             "text_model": text_model,
                             "engine": engine,
                             "voice": voice,
+                            "tts_engine": tts_engine,
                             "output_format": output_format,
                         },
                     )
@@ -992,6 +1175,8 @@ def _generate_audio_tab() -> None:
                     "Download", data=fh.read(), file_name=result.file_path.name,
                     mime=result.metadata.get("mime_type", "audio/wav"),
                 )
+            if result.metadata.get("tts_engine"):
+                st.caption(f"Narrated via: {result.metadata['tts_engine']}")
             if result.metadata.get("format_note"):
                 st.caption(f"ℹ {result.metadata['format_note']}")
             if result.metadata.get("mode") == "topic":
@@ -1101,6 +1286,7 @@ st.caption("POC for SME content authoring. Built on Vertex AI.")
 
 _config_ok = _show_config_status()
 _show_session_cost()
+VENDOR_ENGINE = _show_vendor_selector()
 
 st.header("Transform Existing Content")
 st.caption("Enhance or analyse material the SME already produced — a sketch, a recording, a video.")
@@ -1120,23 +1306,7 @@ def _transform_tab(title: str):
 
 
 with _transform_tab("Image"):
-    _capability_tab(
-        title="Image — hand-drawn diagram → professional render",
-        description=(
-            "Upload an SME's hand-drawn diagram. Labels, numbers, and "
-            "geometric relationships are preserved exactly."
-        ),
-        accept_types=["png", "jpg", "jpeg", "webp"],
-        default_instruction=(
-            "Re-render this hand-drawn diagram as a clean, professional "
-            "illustration. Preserve every label, number, and geometric "
-            "relationship exactly."
-        ),
-        run=_run_image,
-        output_renderer=_render_image_output,
-        options_renderer=_image_enhance_options,
-        options_label="Model & resolution",
-    )
+    _image_enhance_tab()
 
 if SHOW_TEXT_TO_SPEECH_TAB:
     with _transform_tab("Text → Audio"):

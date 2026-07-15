@@ -22,6 +22,7 @@ from typing import Any
 
 from iav.capabilities._json_utils import JsonParseError, parse_json_loose, questions_as_markdown
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
+from iav.models import audio_generation
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
 from iav.models.pricing import summarize_costs
@@ -69,6 +70,8 @@ class AudioQuestionGeneration(Capability):
         multi_speaker = bool(params.get("multi_speaker", False))
         azure_deployment = self.config.azure_openai.get("default_deployment")
         engine = params.get("engine", "auto")
+        azure_voice = self._settings.get("azure_voice")
+        tts_engine = params.get("tts_engine", "auto")
         target_language = params.get("target_language") or self.config.languages.get(
             "default_output_language", "Same as input"
         )
@@ -130,26 +133,31 @@ class AudioQuestionGeneration(Capability):
 
         instruction = (payload.instruction or "").strip() or None
         logger.info(
-            "audio_question_generation: synthesising narration, chars=%d, multi_speaker=%s",
-            len(narration_prompt), multi_speaker,
+            "audio_question_generation: synthesising narration, chars=%d, multi_speaker=%s, tts_engine=%s",
+            len(narration_prompt), multi_speaker, tts_engine,
         )
         try:
-            tts_result = self.client.synthesize_speech(
-                model=tts_model,
+            tts_result = audio_generation.synthesize_speech(
+                gemini_client=self.client,
+                gemini_model=tts_model,
                 script=narration_prompt,
+                label="narrate",
                 voice_preset=None if speakers else voice,
                 speakers=speakers,
                 instruction=instruction,
+                azure_voice=azure_voice,
+                engine=tts_engine,
             )
-        except GeminiCallError as exc:
-            raise AudioQuestionGenerationError(f"TTS call failed: {exc}") from exc
-        calls.append({"label": "narrate", "model": tts_model, "usage": tts_result.usage})
-        if not tts_result.audio_bytes:
-            note = (tts_result.text or "").strip() or "(no detail)"
-            raise AudioQuestionGenerationError(f"TTS returned no audio. Model said: {note}")
+        except audio_generation.AudioSynthesisError as exc:
+            raise AudioQuestionGenerationError(str(exc)) from exc
+        calls.append(tts_result.call_record)
 
-        wav_bytes = _wrap_pcm_as_wav(tts_result.audio_bytes, sample_rate=sample_rate)
-        duration_seconds = _pcm_duration_seconds(tts_result.audio_bytes, sample_rate=sample_rate)
+        if tts_result.is_raw_pcm:
+            wav_bytes = _wrap_pcm_as_wav(tts_result.audio_bytes, sample_rate=sample_rate)
+            duration_seconds = _pcm_duration_seconds(tts_result.audio_bytes, sample_rate=sample_rate)
+        else:
+            wav_bytes = tts_result.audio_bytes
+            duration_seconds = audio_generation.wav_duration_seconds(wav_bytes)
         audio_path = save_output(data=wav_bytes, suffix=".wav", capability=self.name)
 
         # 3. Generate questions from the passage -------------------------------
@@ -206,6 +214,7 @@ class AudioQuestionGeneration(Capability):
                 "text_model": text_model,
                 "tts_model": tts_model,
                 "voice": voice,
+                "tts_engine": tts_result.engine,
                 "multi_speaker": multi_speaker,
                 "accent": accent,
                 "speed": speed,

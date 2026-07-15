@@ -285,6 +285,28 @@ class GeminiClient:
         response = self._generate(model=model, contents=contents, config=cfg)
         return _extract(response)
 
+    def understand_image(
+        self,
+        *,
+        model: str,
+        image_bytes: bytes,
+        image_mime_type: str,
+        instruction: str,
+        response_mime_type: str | None = None,
+    ) -> GenerationResult:
+        """Text-out analysis of an image (e.g. generating questions about it) --
+        distinct from edit_image()/generate_image(), which produce image output.
+        """
+        contents = [
+            genai_types.Part.from_bytes(data=image_bytes, mime_type=image_mime_type),
+            instruction,
+        ]
+        cfg = None
+        if response_mime_type:
+            cfg = genai_types.GenerateContentConfig(response_mime_type=response_mime_type)
+        response = self._generate(model=model, contents=contents, config=cfg)
+        return _extract(response)
+
     def generate_video(
         self,
         *,

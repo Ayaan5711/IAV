@@ -106,6 +106,26 @@ pricing:
       input_text: 0.15
       output_text: 0.60
 
+    # Azure OpenAI's Images API bills a flat rate per image (varies by
+    # size/quality tier), not per token -- no usage_metadata comes back from
+    # that endpoint at all. This is a single flat placeholder rate, not
+    # tiered by size/quality; confirm against your Azure portal's pricing
+    # page and update before trusting it. This key MUST match
+    # azure_openai.image_deployment below exactly.
+    gpt-image-1:
+      verified: false
+      unit: per_image
+      rate_per_image: 0.04
+
+    # Azure Neural TTS bills per character of input text, not per token --
+    # this is a synthetic "model" key (not a real deployment name) shared by
+    # every Azure Speech synthesis call regardless of which voice was used.
+    # Public list-price estimate, unconfirmed against your Azure agreement.
+    azure-neural-tts:
+      verified: false
+      unit: per_million_chars
+      rate_per_million_chars: 16.00
+
 # Single place for every language option in the app -- input (Azure Speech
 # ASR locale, used only for transcription accuracy) and output (the
 # language narration/content ends up in -- an instruction to the text
@@ -205,6 +225,13 @@ languages:
 # pricing.models entry with the same key.
 azure_openai:
   default_deployment: gpt-4o-mini
+  # Optional: an Azure OpenAI Images API deployment (DALL-E-3 or gpt-image-1)
+  # for the image_generate/image_enhance engine selector. Set to null (or
+  # leave the deployment missing on your Azure resource) to disable the
+  # Azure option -- those capabilities fall back to Gemini automatically.
+  # Note: only gpt-image-1 deployments support editing (image_enhance) on
+  # Azure -- dall-e-3 only supports generation (image_generate), not edits.
+  image_deployment: gpt-image-1
 
 capabilities:
 
@@ -226,6 +253,11 @@ capabilities:
     available_tts_models: [gemini-2.5-flash-preview-tts, gemini-2.5-pro-preview-tts]
     voice_preset: Kore
     available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
+    # Azure Neural TTS voice, used when the TTS engine selector picks Azure
+    # (or falls back to it in Auto mode) -- single-voice only, so multi-
+    # speaker narration always uses Gemini regardless of this setting.
+    azure_voice: en-US-JennyNeural
+    available_azure_voices: [en-US-JennyNeural, en-US-GuyNeural, en-GB-SoniaNeural, en-IN-NeerjaNeural, en-IN-PrabhatNeural]
     sample_rate_hz: 24000
     default_question_count: 5
     default_question_type: mcq      # mcq | short_answer | conceptual
@@ -304,6 +336,35 @@ capabilities:
       - Crisp, legible typography for any labels.
       - No shading, decoration, or stylistic flourishes that were not in the
         original sketch.
+    # Optional comprehension questions generated from the rendered image
+    # (off by default, toggled in the UI) -- a text-out call via Gemini's
+    # multimodal understanding, not routable through Azure OpenAI.
+    question_model: gemini-2.5-flash
+    available_text_models: [gemini-2.5-flash, gemini-2.5-pro]
+    default_question_count: 5
+    default_question_type: mcq      # mcq | short_answer | conceptual
+    default_level: undergraduate    # school | undergraduate | postgraduate
+    questions_instruction: |
+      You are an experienced subject-matter expert generating exam-quality
+      questions based strictly on the image provided.
+
+      Generate {count} {question_type} questions at the {level} level based
+      on what the image depicts. Do not invent details not shown in it.
+
+      Return ONLY a JSON object matching this schema:
+      {{
+        "questions": [
+          {{
+            "id": <int>,
+            "type": "<question_type>",
+            "stem": "<the question text>",
+            "options": ["A...", "B...", "C...", "D..."],   // mcq only
+            "answer": "<the correct answer>",
+            "explanation": "<one-sentence rationale>",
+            "difficulty": "easy" | "medium" | "hard"
+          }}
+        ]
+      }}
 
   audio_text_to_speech:
     # Gemini TTS path. Voice preset is a placeholder — needs sign-off from
@@ -312,6 +373,11 @@ capabilities:
     available_models: [gemini-2.5-flash-preview-tts, gemini-2.5-pro-preview-tts]
     voice_preset: Kore
     available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
+    # Azure Neural TTS voice, used when the TTS engine selector picks Azure
+    # (or falls back to it in Auto mode) -- single-voice only, so multi-
+    # speaker narration always uses Gemini regardless of this setting.
+    azure_voice: en-US-JennyNeural
+    available_azure_voices: [en-US-JennyNeural, en-US-GuyNeural, en-GB-SoniaNeural, en-IN-NeerjaNeural, en-IN-PrabhatNeural]
     output_format: wav
     sample_rate_hz: 24000
     default_instruction: |
@@ -335,6 +401,11 @@ capabilities:
     available_tts_models: [gemini-2.5-flash-preview-tts, gemini-2.5-pro-preview-tts]
     voice_preset: Kore
     available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
+    # Azure Neural TTS voice, used when the TTS engine selector picks Azure
+    # (or falls back to it in Auto mode) -- single-voice only, so multi-
+    # speaker narration always uses Gemini regardless of this setting.
+    azure_voice: en-US-JennyNeural
+    available_azure_voices: [en-US-JennyNeural, en-US-GuyNeural, en-GB-SoniaNeural, en-IN-NeerjaNeural, en-IN-PrabhatNeural]
     output_format: wav
     sample_rate_hz: 24000
     cleanup_transcript: true
@@ -494,6 +565,111 @@ capabilities:
       Constraints:
       - No watermarks, signatures, or overlaid text unless explicitly requested.
       - Content must be factually accurate and age-appropriate for the target audience.
+    # Optional comprehension questions generated from the resulting image
+    # (off by default, toggled in the UI) -- a text-out call via Gemini's
+    # multimodal understanding, not routable through Azure OpenAI.
+    question_model: gemini-2.5-flash
+    available_text_models: [gemini-2.5-flash, gemini-2.5-pro]
+    default_question_count: 5
+    default_question_type: mcq      # mcq | short_answer | conceptual
+    default_level: undergraduate    # school | undergraduate | postgraduate
+    questions_instruction: |
+      You are an experienced subject-matter expert generating exam-quality
+      questions based strictly on the image provided.
+
+      Generate {count} {question_type} questions at the {level} level based
+      on what the image depicts. Do not invent details not shown in it.
+
+      Return ONLY a JSON object matching this schema:
+      {{
+        "questions": [
+          {{
+            "id": <int>,
+            "type": "<question_type>",
+            "stem": "<the question text>",
+            "options": ["A...", "B...", "C...", "D..."],   // mcq only
+            "answer": "<the correct answer>",
+            "explanation": "<one-sentence rationale>",
+            "difficulty": "easy" | "medium" | "hard"
+          }}
+        ]
+      }}
+    # Optional "placeholder label" mode (off by default, toggled in the UI) --
+    # for diagrams where some parts should be pre-labelled with their real
+    # value and others should appear only as a bare tag (X, Y, Z...) for the
+    # student to identify. Image generation and question generation are two
+    # independent model calls that don't otherwise share any ground truth --
+    # left to guess independently, they drift (duplicate tags, questions
+    # asking about a part the image already labelled, wrong/reused letters).
+    # This designs the label scheme ONCE as JSON and feeds the same scheme
+    # into both calls, so the two are structurally forced to agree instead of
+    # each re-guessing the labelling from scratch.
+    label_design_instruction: |
+      You are designing the labelling scheme for an exam diagram, before it
+      is drawn, based on the description below.
+
+      Decide which parts of the diagram will show their real value/name
+      directly ("given" labels) and which parts will be shown only as a bare
+      identifier tag for the student to identify later ("placeholder"
+      labels).
+
+      Description:
+      """
+      {free_text}
+      """
+
+      Rules:
+      - Every id must be short and unique -- never reuse the same id twice.
+      - Choose a sensible number of placeholders for this description; don't
+        over- or under-label it.
+      - "given" entries must include the exact value/name to render on the
+        diagram.
+      - "placeholder" entries must include the underlying concept (for our
+        internal answer key only) -- that concept text must never be
+        rendered in the image itself, only the bare id.
+
+      Return ONLY a JSON object matching this schema:
+      {{
+        "labels": [
+          {{"id": "<short unique tag>", "kind": "given", "value": "<text to render>"}},
+          {{"id": "<short unique tag>", "kind": "placeholder", "concept": "<what it represents -- internal use only>"}}
+        ]
+      }}
+    label_render_instruction: |
+      Label scheme to follow exactly when drawing this diagram:
+      {label_summary}
+
+      Rendering rules:
+      - Render every "given" label with its exact value/name shown, at the
+        correct part of the diagram.
+      - Render every "placeholder" label ONLY as its bare id (e.g. just
+        "X"), at the correct part of the diagram. Do not render, hint at, or
+        spell out what a placeholder represents anywhere in the image.
+      - Do not add any label, tag, or id that isn't listed above.
+    placeholder_questions_instruction: |
+      Based strictly on the placeholder-to-concept mapping below (the answer
+      key for an exam diagram), write exactly one {question_type} question
+      per placeholder, asking the student to identify what that labelled
+      part represents. Reference the label id directly in the question
+      (e.g. "What does X represent in the diagram?").
+
+      Placeholder mapping:
+      {placeholder_summary}
+
+      Return ONLY a JSON object matching this schema:
+      {{
+        "questions": [
+          {{
+            "id": <int>,
+            "type": "<question_type>",
+            "stem": "<the question text, referencing the label id>",
+            "options": ["A...", "B...", "C...", "D..."],   // mcq only
+            "answer": "<the correct answer, from the concept>",
+            "explanation": "<one-sentence rationale>",
+            "difficulty": "easy" | "medium" | "hard"
+          }}
+        ]
+      }}
 
   audio_generate:
     # Two input modes (chosen in the UI), same pattern as
@@ -508,6 +684,11 @@ capabilities:
     available_text_models: [gemini-2.5-flash, gemini-2.5-pro]
     voice_preset: Kore
     available_voices: [Kore, Puck, Charon, Fenrir, Aoede, Zephyr, Leda, Orus]
+    # Azure Neural TTS voice, used when the TTS engine selector picks Azure
+    # (or falls back to it in Auto mode) -- single-voice only, so multi-
+    # speaker narration always uses Gemini regardless of this setting.
+    azure_voice: en-US-JennyNeural
+    available_azure_voices: [en-US-JennyNeural, en-US-GuyNeural, en-GB-SoniaNeural, en-IN-NeerjaNeural, en-IN-PrabhatNeural]
     sample_rate_hz: 24000
     # Gemini TTS always returns raw PCM, wrapped as WAV. mp3 is a real
     # conversion via ffmpeg (same dependency video_enhance already needs),

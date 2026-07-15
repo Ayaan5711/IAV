@@ -25,6 +25,7 @@ from iav.capabilities.prompt_schema import (
     validate_common_attributes,
     validate_free_text,
 )
+from iav.models import audio_generation
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
 from iav.models.pricing import summarize_costs
@@ -74,6 +75,8 @@ class AudioGenerate(Capability):
         azure_deployment = self.config.azure_openai.get("default_deployment")
         engine = params.get("engine", "auto")
         sample_rate = int(self._settings.get("sample_rate_hz", 24000))
+        azure_voice = self._settings.get("azure_voice")
+        tts_engine = params.get("tts_engine", "auto")
 
         calls: list[dict] = []
 
@@ -114,27 +117,31 @@ class AudioGenerate(Capability):
             )
 
         logger.info(
-            "audio_generate: mode=%s tts_model=%s multi_speaker=%s accent=%s speed=%s tone=%s",
-            mode, tts_model, multi_speaker, accent, speed, tone,
+            "audio_generate: mode=%s tts_model=%s multi_speaker=%s accent=%s speed=%s tone=%s tts_engine=%s",
+            mode, tts_model, multi_speaker, accent, speed, tone, tts_engine,
         )
 
         try:
-            result = self.client.synthesize_speech(
-                model=tts_model,
+            result = audio_generation.synthesize_speech(
+                gemini_client=self.client,
+                gemini_model=tts_model,
                 script=prompt,
+                label="narrate",
                 voice_preset=None if speakers else voice,
                 speakers=speakers,
+                azure_voice=azure_voice,
+                engine=tts_engine,
             )
-        except GeminiCallError as exc:
-            raise AudioGenerateError(f"Gemini TTS call failed: {exc}") from exc
-        calls.append({"label": "narrate", "model": tts_model, "usage": result.usage})
+        except audio_generation.AudioSynthesisError as exc:
+            raise AudioGenerateError(str(exc)) from exc
+        calls.append(result.call_record)
 
-        if not result.audio_bytes:
-            note = (result.text or "").strip() or "(no detail)"
-            raise AudioGenerateError(f"Model returned no audio. Model said: {note}")
-
-        wav_bytes = _wrap_pcm_as_wav(result.audio_bytes, sample_rate=sample_rate)
-        duration_seconds = _pcm_duration_seconds(result.audio_bytes, sample_rate=sample_rate)
+        if result.is_raw_pcm:
+            wav_bytes = _wrap_pcm_as_wav(result.audio_bytes, sample_rate=sample_rate)
+            duration_seconds = _pcm_duration_seconds(result.audio_bytes, sample_rate=sample_rate)
+        else:
+            wav_bytes = result.audio_bytes
+            duration_seconds = audio_generation.wav_duration_seconds(wav_bytes)
 
         requested_format = (params.get("output_format") or self._settings.get("output_format", "wav")).lower()
         output_bytes, actual_format, format_note = _maybe_convert_to_mp3(wav_bytes, requested_format)
@@ -154,6 +161,7 @@ class AudioGenerate(Capability):
                 "narration_content": content,
                 "tts_model": tts_model,
                 "text_model": text_model,
+                "tts_engine": result.engine,
                 "multi_speaker": multi_speaker,
                 "accent": accent,
                 "speed": speed,

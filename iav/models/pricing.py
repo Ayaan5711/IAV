@@ -64,6 +64,7 @@ def estimate_cost(
     output_images: int = 0,
     duration_seconds: float = 0.0,
     resolution: str | None = None,
+    characters: int = 0,
     label: str = "",
 ) -> CostEstimate:
     models = (pricing_table or {}).get("models", {})
@@ -97,6 +98,9 @@ def estimate_cost(
     if unit == "per_image":
         return _estimate_flat_image_cost(model=model, entry=entry, output_images=output_images, verified=verified)
 
+    if unit == "per_million_chars":
+        return _estimate_char_cost(model=model, entry=entry, characters=characters, verified=verified)
+
     notes: list[str] = []
     breakdown: dict[str, float] = {}
     input_usd = 0.0
@@ -107,7 +111,7 @@ def estimate_cost(
         return CostEstimate(model=model, usd=0.0, verified=verified, tokens=tokens, notes=notes)
 
     if unit != "per_million_tokens":
-        notes.append(f"Model billed as '{unit}', not supported by this calculator — check Cloud Billing.")
+        notes.append(f"Model billed as '{unit}', not supported by this calculator — check your provider's billing directly.")
         return CostEstimate(model=model, usd=0.0, verified=False, tokens=tokens, notes=notes)
 
     # Prefer per-modality rates when the response reported a modality
@@ -177,7 +181,7 @@ def estimate_cost(
             notes.append(f"Includes {usage.tool_use_prompt_tokens:,} tool-use tokens at the input rate.")
 
     if not verified:
-        notes.append("Rate unverified against an official Google source — confirm in Cloud Billing.")
+        notes.append("Rate unverified against an official pricing source — confirm against your provider's actual billing.")
 
     return CostEstimate(
         model=model,
@@ -213,7 +217,7 @@ def _estimate_video_cost(
 
     output_usd = duration_seconds * rate
     if not verified:
-        notes.append("Rate unverified against an official Google source — confirm in Cloud Billing.")
+        notes.append("Rate unverified against an official pricing source — confirm against your provider's actual billing.")
 
     return CostEstimate(
         model=model,
@@ -238,7 +242,7 @@ def _estimate_flat_image_cost(
     count = max(output_images, 1)
     output_usd = count * rate
     if not verified:
-        notes.append("Rate unverified against an official Google source — confirm in Cloud Billing.")
+        notes.append("Rate unverified against an official pricing source — confirm against your provider's actual billing.")
     return CostEstimate(
         model=model,
         usd=output_usd,
@@ -250,10 +254,35 @@ def _estimate_flat_image_cost(
     )
 
 
+def _estimate_char_cost(*, model: str, entry: dict[str, Any], characters: int, verified: bool) -> CostEstimate:
+    """Azure Neural TTS bills per character of input text, not per token."""
+    notes: list[str] = []
+    rate = entry.get("rate_per_million_chars")
+    if rate is None:
+        notes.append("No per-character rate configured for this model.")
+        return CostEstimate(model=model, usd=0.0, verified=verified, notes=notes)
+    if characters <= 0:
+        notes.append("No character count provided — cost not estimated.")
+        return CostEstimate(model=model, usd=0.0, verified=verified, notes=notes)
+    output_usd = characters / 1_000_000 * rate
+    if not verified:
+        notes.append("Rate unverified against an official pricing source — confirm against your provider's actual billing.")
+    return CostEstimate(
+        model=model,
+        usd=output_usd,
+        verified=verified,
+        output_usd=output_usd,
+        breakdown={"output_characters": output_usd},
+        tokens={"prompt": 0, "output": 0},
+        notes=notes,
+    )
+
+
 def summarize_costs(calls: list[dict[str, Any]], pricing_table: dict[str, Any]) -> dict[str, Any]:
     """Roll up cost estimates across every Gemini call a capability made.
 
-    Each call dict: {label, model, usage, output_images (optional)}.
+    Each call dict: {label, model, usage, output_images/duration_seconds/
+    characters (optional, depending on the model's pricing unit)}.
     """
     entries: list[dict[str, Any]] = []
     total = 0.0
@@ -272,6 +301,7 @@ def summarize_costs(calls: list[dict[str, Any]], pricing_table: dict[str, Any]) 
             output_images=call.get("output_images", 0),
             duration_seconds=call.get("duration_seconds", 0.0),
             resolution=call.get("resolution"),
+            characters=call.get("characters", 0),
             label=call.get("label", ""),
         )
         entries.append({"label": call.get("label", call["model"]), **est.as_dict()})
