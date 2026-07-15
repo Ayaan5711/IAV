@@ -225,6 +225,7 @@ class ImageGenerate(Capability):
             metadata={
                 "model": model,
                 "image_engine": result.engine,
+                "revised_prompt": result.revised_prompt,
                 "visual_type": visual_type,
                 "style": style,
                 "prompt": prompt,

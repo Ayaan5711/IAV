@@ -69,62 +69,39 @@ SHOW_TEXT_TO_SPEECH_TAB = False
 # ----------------------------------------------------------------------
 
 
-_ENGINE_LABELS = {
+_VENDOR_LABELS = {
     "Auto (Azure primary, Gemini fallback)": "auto",
     "Gemini only": "gemini",
-    "Azure OpenAI only": "azure",
+    "Azure only": "azure",
 }
 
 
-def _engine_selectbox(key: str, *, disabled: bool = False) -> str:
-    choice = st.selectbox("Text-generation engine", list(_ENGINE_LABELS.keys()), key=key, disabled=disabled)
-    return _ENGINE_LABELS[choice]
+def _show_vendor_selector() -> str:
+    """One global engine toggle for the whole app, not a separate dropdown
+    per capability -- production deployments pick a single vendor rather
+    than mixing Azure/Gemini per feature. Governs every text-generation,
+    image, ASR, and TTS call everywhere.
 
-
-_ASR_ENGINE_LABELS = {
-    "Auto (Azure Speech, Gemini fallback)": "auto",
-    "Gemini only": "gemini",
-    "Azure Speech only": "azure",
-}
-
-
-def _asr_engine_selectbox(key: str) -> str:
-    choice = st.selectbox("Transcription engine", list(_ASR_ENGINE_LABELS.keys()), key=key)
-    return _ASR_ENGINE_LABELS[choice]
-
-
-_IMAGE_ENGINE_LABELS = {
-    "Auto (Azure OpenAI primary, Gemini fallback)": "auto",
-    "Gemini only": "gemini",
-    "Azure OpenAI only": "azure",
-}
-
-
-def _image_engine_selectbox(key: str) -> str:
-    choice = st.selectbox(
-        "Image engine", list(_IMAGE_ENGINE_LABELS.keys()), key=key,
-        help="Azure OpenAI needs azure_openai.image_deployment set in config.yaml (DALL-E-3 for "
-             "generation, gpt-image-1 for editing/enhancement). Falls back to Gemini automatically "
-             "if Azure isn't configured or a call fails.",
-    )
-    return _IMAGE_ENGINE_LABELS[choice]
-
-
-_TTS_ENGINE_LABELS = {
-    "Auto (Azure Speech primary, Gemini fallback)": "auto",
-    "Gemini only": "gemini",
-    "Azure Speech only": "azure",
-}
-
-
-def _tts_engine_selectbox(key: str, *, disabled: bool = False) -> str:
-    choice = st.selectbox(
-        "TTS engine", list(_TTS_ENGINE_LABELS.keys()), key=key, disabled=disabled,
-        help="Azure Neural TTS is single-voice only -- multi-speaker narration always uses Gemini "
-             "regardless of this setting. Falls back to Gemini automatically if Azure isn't "
-             "configured or a call fails.",
-    )
-    return _TTS_ENGINE_LABELS[choice]
+    "Auto" tries Azure first per capability and falls back to Gemini
+    automatically if Azure isn't configured or a call fails. "Gemini only"
+    / "Azure only" pin everything to that one vendor -- Azure only fails
+    loudly (no silent fallback) since it was explicitly requested, the one
+    exception being multi-speaker TTS, which always needs Gemini since
+    Azure Neural TTS here is single-voice only.
+    """
+    with st.sidebar:
+        st.divider()
+        st.markdown("### Vendor")
+        choice = st.selectbox(
+            "Engine (applies everywhere)", list(_VENDOR_LABELS.keys()), key="vendor-engine",
+            help="Covers text generation, image generation/editing, speech-to-text, and "
+                 "text-to-speech across every tab. Video generation has no Azure equivalent and "
+                 "always uses Gemini/Veo regardless of this setting.",
+        )
+        engine = _VENDOR_LABELS[choice]
+        if engine == "azure":
+            st.caption("⚠ Azure only: any step Azure can't do fails loudly instead of falling back to Gemini.")
+        return engine
 
 
 def _idx(options: list | None, value: Any) -> int:
@@ -441,7 +418,7 @@ def _image_enhance_tab() -> None:
             "Question-generation model", text_models, index=_idx(text_models, s.get("question_model")),
             key="ie-qmodel", disabled=not want_questions,
         )
-        image_engine = _image_engine_selectbox("ie-imgengine")
+    image_engine = VENDOR_ENGINE
 
     if st.button("Process", type="primary", key="ie-go"):
         if uploaded is None:
@@ -476,6 +453,10 @@ def _image_enhance_tab() -> None:
             st.image(str(result.file_path), caption=result.file_path.name)
             if result.metadata.get("image_engine"):
                 st.caption(f"Rendered via: {result.metadata['image_engine']}")
+            if result.metadata.get("revised_prompt"):
+                with st.expander("⚠ Azure rewrote this instruction before rendering"):
+                    st.caption("DALL-E-3 rewrites prompts internally before rendering — this is what it actually used.")
+                    st.text(result.metadata["revised_prompt"])
             with result.file_path.open("rb") as fh:
                 st.download_button(
                     "Download", data=fh.read(), file_name=result.file_path.name,
@@ -655,13 +636,12 @@ def _audio_to_audio_tab() -> None:
     language = None
     length = None
 
-    asr_engine = "auto"
+    asr_engine = VENDOR_ENGINE
     if top_mode_label == "Upload recording":
         mode = "upload"
         uploaded = st.file_uploader(
             "Upload file", type=["mp3", "wav", "m4a", "ogg", "flac"], key="a2a-upload"
         )
-        asr_engine = _asr_engine_selectbox("a2a-asrengine")
         input_locales = langs.get("input_locales") or ["en-US"]
         language = st.selectbox(
             "Spoken language (for transcription accuracy — not translation)",
@@ -715,15 +695,10 @@ def _audio_to_audio_tab() -> None:
         tts_models = s.get("available_tts_models") or [s["tts_model"]]
         tts_model = cols2[1].selectbox("TTS model", tts_models, index=_idx(tts_models, s["tts_model"]), key="a2a-ttsmodel")
         with cols2[2]:
-            engine = _engine_selectbox("a2a-engine")
-        st.caption(
-            "The engine above applies to every text step (cleanup, content writing, "
-            "translation, question generation). \"Auto\" uses Azure OpenAI by default, "
-            "falling back to Gemini only if Azure isn't configured or a call fails."
-        )
-        voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
-        voice = st.selectbox("Voice", voices, index=_idx(voices, s.get("voice_preset")), key="a2a-voice")
-        tts_engine = _tts_engine_selectbox("a2a-ttsengine")
+            voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
+            voice = st.selectbox("Voice", voices, index=_idx(voices, s.get("voice_preset")), key="a2a-voice")
+    engine = VENDOR_ENGINE
+    tts_engine = VENDOR_ENGINE
 
     if st.button("Process", type="primary", key="a2a-go"):
         if mode == "upload" and uploaded is None:
@@ -874,13 +849,11 @@ def _audio_questions_tab() -> None:
             "Voice (single-speaker only)", voices, index=_idx(voices, s.get("voice_preset")),
             key="aq-voice", disabled=multi_speaker,
         )
-        cols4 = st.columns(3)
+        cols4 = st.columns(2)
         accents = s.get("accents") or ["Neutral"]
         accent = cols4[0].selectbox("Accent", accents, key="aq-accent")
         speeds = s.get("speeds") or ["Normal"]
         speed = cols4[1].selectbox("Speed", speeds, key="aq-speed")
-        with cols4[2]:
-            engine = _engine_selectbox("aq-engine")
         tones = s.get("tones") or ["Neutral"]
         tone = st.selectbox("Tone", tones, key="aq-tone")
         instruction = st.text_area(
@@ -889,9 +862,10 @@ def _audio_questions_tab() -> None:
             height=80,
             key="aq-instruction",
         )
-        tts_engine = _tts_engine_selectbox("aq-ttsengine", disabled=multi_speaker)
         if multi_speaker:
-            st.caption("Multi-speaker narration always uses Gemini — the engine choice above is ignored.")
+            st.caption("Multi-speaker narration always uses Gemini, regardless of the sidebar vendor setting.")
+    engine = VENDOR_ENGINE
+    tts_engine = VENDOR_ENGINE
 
     if st.button("Process", type="primary", key="aq-go"):
         if not (text_input or "").strip():
@@ -1007,6 +981,13 @@ def _generate_image_tab() -> None:
     )
     if use_label_placeholders and want_questions:
         st.caption("Question count/type/level above are ignored in placeholder mode — one question is generated per placeholder.")
+    if use_label_placeholders and VENDOR_ENGINE != "gemini":
+        st.caption(
+            "ℹ If this ends up rendering via Azure DALL-E-3 (see Vendor in the sidebar), its "
+            "automatic prompt-rewriting step doesn't reliably preserve exact placeholder-labelling "
+            "instructions the way Gemini or Azure gpt-image-1 does — check the render before "
+            "trusting the label placement."
+        )
 
     with st.expander("Advanced options", expanded=False):
         cols2 = st.columns(3)
@@ -1021,7 +1002,7 @@ def _generate_image_tab() -> None:
             "Question-generation model", text_models, index=_idx(text_models, s.get("question_model")),
             key="gi-qmodel", disabled=not (want_questions or use_label_placeholders),
         )
-        image_engine = _image_engine_selectbox("gi-imgengine")
+    image_engine = VENDOR_ENGINE
 
     if st.button("Generate", type="primary", key="gi-go"):
         errors = validate_common_attributes(common) + validate_free_text(free_text)
@@ -1066,8 +1047,12 @@ def _generate_image_tab() -> None:
                     "Download", data=fh.read(), file_name=result.file_path.name,
                     mime=result.metadata.get("mime_type", "image/png"),
                 )
-            with st.expander("Prompt sent to Gemini"):
+            with st.expander("Prompt sent"):
                 st.text(result.metadata.get("prompt", ""))
+            if result.metadata.get("revised_prompt"):
+                with st.expander("⚠ Azure rewrote this prompt before generating"):
+                    st.caption("DALL-E-3 rewrites prompts internally before rendering — this is what it actually used.")
+                    st.text(result.metadata["revised_prompt"])
             label_path = result.metadata.get("label_json_path")
             if label_path and Path(label_path).exists():
                 with st.expander(f"Label key ({result.metadata.get('label_count', '?')}) — your reference, not shown in the image"):
@@ -1132,22 +1117,20 @@ def _generate_audio_tab() -> None:
         )
         models = s.get("available_models") or [s["model"]]
         model = cols3[1].selectbox("TTS model", models, index=_idx(models, s["model"]), key="ga-model")
-        with cols3[2]:
-            engine = _engine_selectbox("ga-engine", disabled=(mode == "script"))
-
-        cols4 = st.columns(2)
         voices = s.get("available_voices") or [s.get("voice_preset", "Kore")]
-        voice = cols4[0].selectbox(
+        voice = cols3[2].selectbox(
             "Voice (single-speaker only)", voices, index=_idx(voices, s.get("voice_preset")),
             key="ga-voice", disabled=multi_speaker,
         )
+
         formats = s.get("available_formats") or [s.get("output_format", "wav")]
-        output_format = cols4[1].selectbox(
+        output_format = st.selectbox(
             "Output format", formats, index=_idx(formats, s.get("output_format")), key="ga-fmt"
         )
-        tts_engine = _tts_engine_selectbox("ga-ttsengine", disabled=multi_speaker)
         if multi_speaker:
-            st.caption("Multi-speaker narration always uses Gemini — the engine choice above is ignored.")
+            st.caption("Multi-speaker narration always uses Gemini, regardless of the sidebar vendor setting.")
+    engine = VENDOR_ENGINE
+    tts_engine = VENDOR_ENGINE
 
     if st.button("Generate", type="primary", key="ga-go"):
         errors = validate_common_attributes(common) + validate_free_text(free_text)
@@ -1303,6 +1286,7 @@ st.caption("POC for SME content authoring. Built on Vertex AI.")
 
 _config_ok = _show_config_status()
 _show_session_cost()
+VENDOR_ENGINE = _show_vendor_selector()
 
 st.header("Transform Existing Content")
 st.caption("Enhance or analyse material the SME already produced — a sketch, a recording, a video.")

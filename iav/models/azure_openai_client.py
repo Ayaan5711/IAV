@@ -45,6 +45,18 @@ class AzureTextResult:
 class AzureImageResult:
     image_bytes: bytes
     mime_type: str = "image/png"
+    # DALL-E-3 silently rewrites prompts via its own internal model before
+    # generating -- this is what it actually rendered, when Azure reports
+    # it (gpt-image-1 generally doesn't rewrite, so this is usually None
+    # there). Surface it to the caller rather than let the rewrite happen
+    # invisibly.
+    revised_prompt: str | None = None
+
+
+# DALL-E-3's documented prompt limit; gpt-image-1 allows quite a lot more,
+# but a deployment name doesn't reliably tell us which model it actually
+# runs, so this errs conservative rather than risk a cryptic 400 from Azure.
+MAX_IMAGE_PROMPT_CHARS = 4000
 
 
 _client_singleton = None
@@ -121,13 +133,14 @@ def generate_text(prompt: str, *, deployment: str, response_mime_type: str | Non
     )
 
 
-def _decode_image_response(response: Any, *, label: str) -> bytes:
+def _decode_image_response(response: Any, *, label: str) -> tuple[bytes, str | None]:
     item = response.data[0] if getattr(response, "data", None) else None
     if item is None:
         raise AzureOpenAIUnavailable(f"Azure OpenAI {label} returned no image data.")
+    revised_prompt = getattr(item, "revised_prompt", None)
     b64 = getattr(item, "b64_json", None)
     if b64:
-        return base64.b64decode(b64)
+        return base64.b64decode(b64), revised_prompt
     url = getattr(item, "url", None)
     if url:
         try:
@@ -135,7 +148,7 @@ def _decode_image_response(response: Any, *, label: str) -> bytes:
             resp.raise_for_status()
         except requests.RequestException as exc:
             raise AzureOpenAIUnavailable(f"Could not download Azure OpenAI {label} result: {exc}") from exc
-        return resp.content
+        return resp.content, revised_prompt
     raise AzureOpenAIUnavailable(f"Azure OpenAI {label} response had neither b64_json nor url.")
 
 
@@ -150,6 +163,13 @@ def generate_image(
         raise AzureOpenAIUnavailable("The 'openai' package is not installed.")
     if not is_configured():
         raise AzureOpenAIUnavailable("AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_API_KEY are not set.")
+    if len(prompt) > MAX_IMAGE_PROMPT_CHARS:
+        raise AzureOpenAIUnavailable(
+            f"Prompt is {len(prompt)} characters, over the {MAX_IMAGE_PROMPT_CHARS}-character "
+            "limit Azure's Images API enforces for DALL-E-3 (gpt-image-1 deployments allow more, "
+            "but this check errs conservative since the deployment's actual model isn't known "
+            "here). Shorten the description or the assessment-metadata block."
+        )
 
     client = _get_client()
     logger.info("azure_openai: generating image (deployment=%s, size=%s)", deployment, size)
@@ -159,9 +179,11 @@ def generate_image(
         logger.exception("azure_openai: image generation failed (deployment=%s)", deployment)
         raise AzureOpenAIUnavailable(str(exc)) from exc
 
-    image_bytes = _decode_image_response(response, label="image generation")
+    image_bytes, revised_prompt = _decode_image_response(response, label="image generation")
     logger.info("azure_openai: image generated (%d bytes)", len(image_bytes))
-    return AzureImageResult(image_bytes=image_bytes)
+    if revised_prompt and revised_prompt != prompt:
+        logger.info("azure_openai: DALL-E-3 rewrote the prompt before generating -- see revised_prompt")
+    return AzureImageResult(image_bytes=image_bytes, revised_prompt=revised_prompt)
 
 
 def edit_image(
@@ -182,6 +204,13 @@ def edit_image(
         raise AzureOpenAIUnavailable("The 'openai' package is not installed.")
     if not is_configured():
         raise AzureOpenAIUnavailable("AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_API_KEY are not set.")
+    if len(prompt) > MAX_IMAGE_PROMPT_CHARS:
+        raise AzureOpenAIUnavailable(
+            f"Prompt is {len(prompt)} characters, over the {MAX_IMAGE_PROMPT_CHARS}-character "
+            "limit Azure's Images API enforces for DALL-E-3 (gpt-image-1 deployments allow more, "
+            "but this check errs conservative since the deployment's actual model isn't known "
+            "here). Shorten the instruction text."
+        )
 
     client = _get_client()
     ext = "jpg" if "jpeg" in image_mime_type else "png"
@@ -195,6 +224,6 @@ def edit_image(
         logger.exception("azure_openai: image edit failed (deployment=%s)", deployment)
         raise AzureOpenAIUnavailable(str(exc)) from exc
 
-    image_bytes_out = _decode_image_response(response, label="image edit")
+    image_bytes_out, revised_prompt = _decode_image_response(response, label="image edit")
     logger.info("azure_openai: image edited (%d bytes)", len(image_bytes_out))
-    return AzureImageResult(image_bytes=image_bytes_out)
+    return AzureImageResult(image_bytes=image_bytes_out, revised_prompt=revised_prompt)

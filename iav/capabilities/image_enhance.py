@@ -141,6 +141,7 @@ class ImageEnhance(Capability):
             metadata={
                 "model": model,
                 "image_engine": result.engine,
+                "revised_prompt": result.revised_prompt,
                 "input_file": str(source),
                 "input_bytes": len(image_bytes),
                 "output_bytes": len(result.image_bytes),

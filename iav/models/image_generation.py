@@ -37,6 +37,10 @@ class ImageGenerationResult:
     image_mime_type: str
     engine: str  # "azure-openai" | "gemini"
     call_record: dict[str, Any]  # ready to append to a capability's `calls` list
+    # DALL-E-3 rewrites prompts internally before generating -- this is what
+    # it actually used, when Azure reports it. None for Gemini (no
+    # equivalent rewrite step) and usually None for gpt-image-1 too.
+    revised_prompt: str | None = None
 
 
 def _call_gemini_generate(
@@ -63,6 +67,7 @@ def _call_azure_generate(*, deployment: str, prompt: str, size: str, quality: st
         image_mime_type=azure_result.mime_type,
         engine="azure-openai",
         call_record={"label": label, "model": deployment, "usage": None, "output_images": 1},
+        revised_prompt=azure_result.revised_prompt,
     )
 
 
@@ -144,6 +149,7 @@ def _call_azure_edit(*, deployment: str, image_bytes: bytes, image_mime_type: st
         image_mime_type=azure_result.mime_type,
         engine="azure-openai",
         call_record={"label": label, "model": deployment, "usage": None, "output_images": 1},
+        revised_prompt=azure_result.revised_prompt,
     )
 
 
