@@ -14,6 +14,7 @@ from pathlib import Path
 
 from iav.capabilities._json_utils import JsonParseError, parse_json_loose
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
+from iav.models import image_generation
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
 from iav.models.pricing import summarize_costs
@@ -54,33 +55,35 @@ class ImageEnhance(Capability):
         count = int(params.get("count", self._settings.get("default_question_count", 5)))
         qtype = params.get("type") or self._settings.get("default_question_type", "mcq")
         level = params.get("level") or self._settings.get("default_level", "undergraduate")
+        azure_image_deployment = self.config.azure_openai.get("image_deployment")
+        image_engine = params.get("image_engine", "auto")
 
         logger.info(
-            "image_enhance: invoking model=%s resolution=%s on file=%s (%d bytes)",
+            "image_enhance: invoking model=%s resolution=%s on file=%s (%d bytes) image_engine=%s",
             model,
             resolution,
             source.name,
             len(image_bytes),
+            image_engine,
         )
 
         try:
-            result = self.client.edit_image(
-                model=model,
+            result = image_generation.edit_image(
+                gemini_client=self.client,
+                gemini_model=model,
                 image_bytes=image_bytes,
                 image_mime_type=mime_type,
                 instruction=instruction,
+                label="image_edit",
                 resolution=resolution,
                 output_mime_type=output_format,
+                azure_deployment=azure_image_deployment,
+                engine=image_engine,
             )
-        except GeminiCallError as exc:
-            raise ImageEnhanceError(f"Gemini call failed: {exc}") from exc
-
-        if not result.image_bytes:
-            note = (result.text or "").strip() or "(no detail)"
+        except image_generation.ImageGenerationError as exc:
             raise ImageEnhanceError(
-                "Model returned no image. This typically means a safety filter "
-                f"blocked the output. Model said: {note}"
-            )
+                f"{exc} (a Gemini failure here typically means a safety filter blocked the output)"
+            ) from exc
 
         image_mime_type = result.image_mime_type
         output_path = save_output(
@@ -89,7 +92,7 @@ class ImageEnhance(Capability):
             capability=self.name,
         )
 
-        calls = [{"label": "image_edit", "model": model, "usage": result.usage, "output_images": 1}]
+        calls = [result.call_record]
 
         questions: list | None = None
         parsed: dict | None = None
@@ -133,10 +136,11 @@ class ImageEnhance(Capability):
 
         return CapabilityOutput(
             file_path=output_path,
-            text=result.text,
+            text="",
             data=parsed,
             metadata={
                 "model": model,
+                "image_engine": result.engine,
                 "input_file": str(source),
                 "input_bytes": len(image_bytes),
                 "output_bytes": len(result.image_bytes),

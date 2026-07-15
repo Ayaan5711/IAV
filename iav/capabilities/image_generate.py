@@ -18,6 +18,7 @@ from iav.capabilities.prompt_schema import (
     validate_common_attributes,
     validate_free_text,
 )
+from iav.models import image_generation
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
 from iav.models.pricing import summarize_costs
@@ -132,30 +133,35 @@ class ImageGenerate(Capability):
             label_bytes = json.dumps({"labels": labels}, indent=2, ensure_ascii=False).encode("utf-8")
             label_json_path = save_output(data=label_bytes, suffix=".json", capability=f"{self.name}-labels")
 
+        azure_image_deployment = self.config.azure_openai.get("image_deployment")
+        image_engine = params.get("image_engine", "auto")
+
         logger.info(
-            "image_generate: model=%s visual_type=%s style=%s resolution=%s label_placeholders=%s",
-            model, visual_type, style, resolution, use_label_placeholders,
+            "image_generate: model=%s visual_type=%s style=%s resolution=%s label_placeholders=%s image_engine=%s",
+            model, visual_type, style, resolution, use_label_placeholders, image_engine,
         )
 
         try:
-            result = self.client.generate_image(
-                model=model, prompt=prompt, resolution=resolution, output_mime_type=output_format
+            result = image_generation.generate_image(
+                gemini_client=self.client,
+                gemini_model=model,
+                prompt=prompt,
+                label="image_generate",
+                resolution=resolution,
+                output_mime_type=output_format,
+                azure_deployment=azure_image_deployment,
+                engine=image_engine,
             )
-        except GeminiCallError as exc:
-            raise ImageGenerateError(f"Gemini call failed: {exc}") from exc
-
-        if not result.image_bytes:
-            note = (result.text or "").strip() or "(no detail)"
+        except image_generation.ImageGenerationError as exc:
             raise ImageGenerateError(
-                f"Model returned no image. This typically means a safety filter blocked the output. "
-                f"Model said: {note}"
-            )
+                f"{exc} (a Gemini failure here typically means a safety filter blocked the output)"
+            ) from exc
 
-        image_mime_type = result.image_mime_type or "image/png"
+        image_mime_type = result.image_mime_type
         suffix = ".jpg" if image_mime_type == "image/jpeg" else ".png"
         output_path = save_output(data=result.image_bytes, suffix=suffix, capability=self.name)
 
-        calls.append({"label": "image_generate", "model": model, "usage": result.usage, "output_images": 1})
+        calls.append(result.call_record)
 
         questions: list | None = None
         parsed: dict | None = None
@@ -214,10 +220,11 @@ class ImageGenerate(Capability):
 
         return CapabilityOutput(
             file_path=output_path,
-            text=result.text,
+            text="",
             data=parsed,
             metadata={
                 "model": model,
+                "image_engine": result.engine,
                 "visual_type": visual_type,
                 "style": style,
                 "prompt": prompt,

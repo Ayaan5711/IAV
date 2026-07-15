@@ -107,7 +107,7 @@ def estimate_cost(
         return CostEstimate(model=model, usd=0.0, verified=verified, tokens=tokens, notes=notes)
 
     if unit != "per_million_tokens":
-        notes.append(f"Model billed as '{unit}', not supported by this calculator — check Cloud Billing.")
+        notes.append(f"Model billed as '{unit}', not supported by this calculator — check your provider's billing directly.")
         return CostEstimate(model=model, usd=0.0, verified=False, tokens=tokens, notes=notes)
 
     # Prefer per-modality rates when the response reported a modality
@@ -177,7 +177,7 @@ def estimate_cost(
             notes.append(f"Includes {usage.tool_use_prompt_tokens:,} tool-use tokens at the input rate.")
 
     if not verified:
-        notes.append("Rate unverified against an official Google source — confirm in Cloud Billing.")
+        notes.append("Rate unverified against an official pricing source — confirm against your provider's actual billing.")
 
     return CostEstimate(
         model=model,
@@ -213,7 +213,7 @@ def _estimate_video_cost(
 
     output_usd = duration_seconds * rate
     if not verified:
-        notes.append("Rate unverified against an official Google source — confirm in Cloud Billing.")
+        notes.append("Rate unverified against an official pricing source — confirm against your provider's actual billing.")
 
     return CostEstimate(
         model=model,
@@ -238,7 +238,7 @@ def _estimate_flat_image_cost(
     count = max(output_images, 1)
     output_usd = count * rate
     if not verified:
-        notes.append("Rate unverified against an official Google source — confirm in Cloud Billing.")
+        notes.append("Rate unverified against an official pricing source — confirm against your provider's actual billing.")
     return CostEstimate(
         model=model,
         usd=output_usd,

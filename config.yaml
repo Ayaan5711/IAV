@@ -106,6 +106,17 @@ pricing:
       input_text: 0.15
       output_text: 0.60
 
+    # Azure OpenAI's Images API bills a flat rate per image (varies by
+    # size/quality tier), not per token -- no usage_metadata comes back from
+    # that endpoint at all. This is a single flat placeholder rate, not
+    # tiered by size/quality; confirm against your Azure portal's pricing
+    # page and update before trusting it. This key MUST match
+    # azure_openai.image_deployment below exactly.
+    gpt-image-1:
+      verified: false
+      unit: per_image
+      rate_per_image: 0.04
+
 # Single place for every language option in the app -- input (Azure Speech
 # ASR locale, used only for transcription accuracy) and output (the
 # language narration/content ends up in -- an instruction to the text
@@ -205,6 +216,13 @@ languages:
 # pricing.models entry with the same key.
 azure_openai:
   default_deployment: gpt-4o-mini
+  # Optional: an Azure OpenAI Images API deployment (DALL-E-3 or gpt-image-1)
+  # for the image_generate/image_enhance engine selector. Set to null (or
+  # leave the deployment missing on your Azure resource) to disable the
+  # Azure option -- those capabilities fall back to Gemini automatically.
+  # Note: only gpt-image-1 deployments support editing (image_enhance) on
+  # Azure -- dall-e-3 only supports generation (image_generate), not edits.
+  image_deployment: gpt-image-1
 
 capabilities:
 

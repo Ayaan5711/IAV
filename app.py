@@ -93,6 +93,23 @@ def _asr_engine_selectbox(key: str) -> str:
     return _ASR_ENGINE_LABELS[choice]
 
 
+_IMAGE_ENGINE_LABELS = {
+    "Auto (Azure OpenAI primary, Gemini fallback)": "auto",
+    "Gemini only": "gemini",
+    "Azure OpenAI only": "azure",
+}
+
+
+def _image_engine_selectbox(key: str) -> str:
+    choice = st.selectbox(
+        "Image engine", list(_IMAGE_ENGINE_LABELS.keys()), key=key,
+        help="Azure OpenAI needs azure_openai.image_deployment set in config.yaml (DALL-E-3 for "
+             "generation, gpt-image-1 for editing/enhancement). Falls back to Gemini automatically "
+             "if Azure isn't configured or a call fails.",
+    )
+    return _IMAGE_ENGINE_LABELS[choice]
+
+
 def _idx(options: list | None, value: Any) -> int:
     if not options:
         return 0
@@ -407,6 +424,7 @@ def _image_enhance_tab() -> None:
             "Question-generation model", text_models, index=_idx(text_models, s.get("question_model")),
             key="ie-qmodel", disabled=not want_questions,
         )
+        image_engine = _image_engine_selectbox("ie-imgengine")
 
     if st.button("Process", type="primary", key="ie-go"):
         if uploaded is None:
@@ -431,6 +449,7 @@ def _image_enhance_tab() -> None:
                             "count": q_count,
                             "type": q_type,
                             "level": q_level,
+                            "image_engine": image_engine,
                         },
                     )
                 )
@@ -438,6 +457,8 @@ def _image_enhance_tab() -> None:
             _render_time_taken(elapsed)
             st.success("Done.")
             st.image(str(result.file_path), caption=result.file_path.name)
+            if result.metadata.get("image_engine"):
+                st.caption(f"Rendered via: {result.metadata['image_engine']}")
             with result.file_path.open("rb") as fh:
                 st.download_button(
                     "Download", data=fh.read(), file_name=result.file_path.name,
@@ -973,6 +994,7 @@ def _generate_image_tab() -> None:
             "Question-generation model", text_models, index=_idx(text_models, s.get("question_model")),
             key="gi-qmodel", disabled=not (want_questions or use_label_placeholders),
         )
+        image_engine = _image_engine_selectbox("gi-imgengine")
 
     if st.button("Generate", type="primary", key="gi-go"):
         errors = validate_common_attributes(common) + validate_free_text(free_text)
@@ -1002,6 +1024,7 @@ def _generate_image_tab() -> None:
                             "type": q_type,
                             "level": q_level,
                             "use_label_placeholders": use_label_placeholders,
+                            "image_engine": image_engine,
                         },
                     )
                 )
@@ -1009,6 +1032,8 @@ def _generate_image_tab() -> None:
             st.success("Done.")
             _render_time_taken(elapsed)
             st.image(str(result.file_path), caption=result.file_path.name)
+            if result.metadata.get("image_engine"):
+                st.caption(f"Rendered via: {result.metadata['image_engine']}")
             with result.file_path.open("rb") as fh:
                 st.download_button(
                     "Download", data=fh.read(), file_name=result.file_path.name,

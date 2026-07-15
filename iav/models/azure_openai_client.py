@@ -8,9 +8,14 @@ iav/models/text_generation.py) catch that and fall back to Gemini.
 
 from __future__ import annotations
 
+import base64
+import io
 import logging
 import os
 from dataclasses import dataclass
+from typing import Any
+
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +39,12 @@ class AzureTextResult:
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
+
+
+@dataclass
+class AzureImageResult:
+    image_bytes: bytes
+    mime_type: str = "image/png"
 
 
 _client_singleton = None
@@ -108,3 +119,82 @@ def generate_text(prompt: str, *, deployment: str, response_mime_type: str | Non
         completion_tokens=completion_tokens,
         total_tokens=total_tokens,
     )
+
+
+def _decode_image_response(response: Any, *, label: str) -> bytes:
+    item = response.data[0] if getattr(response, "data", None) else None
+    if item is None:
+        raise AzureOpenAIUnavailable(f"Azure OpenAI {label} returned no image data.")
+    b64 = getattr(item, "b64_json", None)
+    if b64:
+        return base64.b64decode(b64)
+    url = getattr(item, "url", None)
+    if url:
+        try:
+            resp = requests.get(url, timeout=30)
+            resp.raise_for_status()
+        except requests.RequestException as exc:
+            raise AzureOpenAIUnavailable(f"Could not download Azure OpenAI {label} result: {exc}") from exc
+        return resp.content
+    raise AzureOpenAIUnavailable(f"Azure OpenAI {label} response had neither b64_json nor url.")
+
+
+def generate_image(
+    prompt: str, *, deployment: str, size: str = "1024x1024", quality: str = "standard"
+) -> AzureImageResult:
+    """Text-to-image via Azure OpenAI's Images API (DALL-E-3 / gpt-image-1
+    deployments). Azure images bill a flat rate per image, not per token --
+    no usage/token counts come back from this endpoint.
+    """
+    if not _SDK_AVAILABLE:
+        raise AzureOpenAIUnavailable("The 'openai' package is not installed.")
+    if not is_configured():
+        raise AzureOpenAIUnavailable("AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_API_KEY are not set.")
+
+    client = _get_client()
+    logger.info("azure_openai: generating image (deployment=%s, size=%s)", deployment, size)
+    try:
+        response = client.images.generate(model=deployment, prompt=prompt, size=size, quality=quality, n=1)
+    except Exception as exc:
+        logger.exception("azure_openai: image generation failed (deployment=%s)", deployment)
+        raise AzureOpenAIUnavailable(str(exc)) from exc
+
+    image_bytes = _decode_image_response(response, label="image generation")
+    logger.info("azure_openai: image generated (%d bytes)", len(image_bytes))
+    return AzureImageResult(image_bytes=image_bytes)
+
+
+def edit_image(
+    prompt: str,
+    *,
+    deployment: str,
+    image_bytes: bytes,
+    image_mime_type: str = "image/png",
+    size: str = "1024x1024",
+) -> AzureImageResult:
+    """Image-in/image-out edit via Azure OpenAI's Images API.
+
+    Only gpt-image-1 deployments support editing on Azure -- dall-e-3
+    doesn't expose an edit endpoint, so this will fail against a dall-e-3
+    deployment even though generate_image() works fine against the same one.
+    """
+    if not _SDK_AVAILABLE:
+        raise AzureOpenAIUnavailable("The 'openai' package is not installed.")
+    if not is_configured():
+        raise AzureOpenAIUnavailable("AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_API_KEY are not set.")
+
+    client = _get_client()
+    ext = "jpg" if "jpeg" in image_mime_type else "png"
+    buf = io.BytesIO(image_bytes)
+    buf.name = f"image.{ext}"  # the SDK needs a filename to set the multipart content-type
+
+    logger.info("azure_openai: editing image (deployment=%s, size=%s)", deployment, size)
+    try:
+        response = client.images.edit(model=deployment, image=buf, prompt=prompt, size=size, n=1)
+    except Exception as exc:
+        logger.exception("azure_openai: image edit failed (deployment=%s)", deployment)
+        raise AzureOpenAIUnavailable(str(exc)) from exc
+
+    image_bytes_out = _decode_image_response(response, label="image edit")
+    logger.info("azure_openai: image edited (%d bytes)", len(image_bytes_out))
+    return AzureImageResult(image_bytes=image_bytes_out)
