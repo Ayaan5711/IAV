@@ -13,6 +13,7 @@ from config.yaml's available_* lists.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 import traceback
@@ -941,9 +942,23 @@ def _generate_image_tab() -> None:
         key="gi-freetext",
     )
 
+    use_label_placeholders = st.checkbox(
+        "Diagram has labelled placeholders (e.g. X, Y, Z) that questions should ask about",
+        value=False,
+        key="gi-labelmode",
+        help=(
+            "Designs a label scheme first (which parts show their real value vs. a bare "
+            "placeholder tag) and reuses it for both the image and the questions, so the two "
+            "can't disagree on labelling -- fixes duplicate/mismatched labels and questions "
+            "that ask about a part the image already reveals."
+        ),
+    )
+
     want_questions, q_count, q_type, q_level = _questions_toggle_form(
         "gi", default_count=int(s.get("default_question_count", 5))
     )
+    if use_label_placeholders and want_questions:
+        st.caption("Question count/type/level above are ignored in placeholder mode — one question is generated per placeholder.")
 
     with st.expander("Advanced options", expanded=False):
         cols2 = st.columns(3)
@@ -956,7 +971,7 @@ def _generate_image_tab() -> None:
         text_models = s.get("available_text_models") or [s.get("question_model", model)]
         question_model = st.selectbox(
             "Question-generation model", text_models, index=_idx(text_models, s.get("question_model")),
-            key="gi-qmodel", disabled=not want_questions,
+            key="gi-qmodel", disabled=not (want_questions or use_label_placeholders),
         )
 
     if st.button("Generate", type="primary", key="gi-go"):
@@ -986,6 +1001,7 @@ def _generate_image_tab() -> None:
                             "count": q_count,
                             "type": q_type,
                             "level": q_level,
+                            "use_label_placeholders": use_label_placeholders,
                         },
                     )
                 )
@@ -1000,6 +1016,15 @@ def _generate_image_tab() -> None:
                 )
             with st.expander("Prompt sent to Gemini"):
                 st.text(result.metadata.get("prompt", ""))
+            label_path = result.metadata.get("label_json_path")
+            if label_path and Path(label_path).exists():
+                with st.expander(f"Label key ({result.metadata.get('label_count', '?')}) — your reference, not shown in the image"):
+                    st.json(json.loads(Path(label_path).read_text(encoding="utf-8")))
+                with Path(label_path).open("rb") as fh:
+                    st.download_button(
+                        "Download label key", data=fh.read(), file_name=Path(label_path).name,
+                        mime="application/json", key="gi-dllabels",
+                    )
             _render_questions_block(result.metadata, result.data, "gi")
             _render_cost(result.metadata)
         except Exception as exc:  # noqa: BLE001

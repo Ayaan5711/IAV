@@ -552,6 +552,82 @@ capabilities:
           }}
         ]
       }}
+    # Optional "placeholder label" mode (off by default, toggled in the UI) --
+    # for diagrams where some parts should be pre-labelled with their real
+    # value and others should appear only as a bare tag (X, Y, Z...) for the
+    # student to identify. Image generation and question generation are two
+    # independent model calls that don't otherwise share any ground truth --
+    # left to guess independently, they drift (duplicate tags, questions
+    # asking about a part the image already labelled, wrong/reused letters).
+    # This designs the label scheme ONCE as JSON and feeds the same scheme
+    # into both calls, so the two are structurally forced to agree instead of
+    # each re-guessing the labelling from scratch.
+    label_design_instruction: |
+      You are designing the labelling scheme for an exam diagram, before it
+      is drawn, based on the description below.
+
+      Decide which parts of the diagram will show their real value/name
+      directly ("given" labels) and which parts will be shown only as a bare
+      identifier tag for the student to identify later ("placeholder"
+      labels).
+
+      Description:
+      """
+      {free_text}
+      """
+
+      Rules:
+      - Every id must be short and unique -- never reuse the same id twice.
+      - Choose a sensible number of placeholders for this description; don't
+        over- or under-label it.
+      - "given" entries must include the exact value/name to render on the
+        diagram.
+      - "placeholder" entries must include the underlying concept (for our
+        internal answer key only) -- that concept text must never be
+        rendered in the image itself, only the bare id.
+
+      Return ONLY a JSON object matching this schema:
+      {{
+        "labels": [
+          {{"id": "<short unique tag>", "kind": "given", "value": "<text to render>"}},
+          {{"id": "<short unique tag>", "kind": "placeholder", "concept": "<what it represents -- internal use only>"}}
+        ]
+      }}
+    label_render_instruction: |
+      Label scheme to follow exactly when drawing this diagram:
+      {label_summary}
+
+      Rendering rules:
+      - Render every "given" label with its exact value/name shown, at the
+        correct part of the diagram.
+      - Render every "placeholder" label ONLY as its bare id (e.g. just
+        "X"), at the correct part of the diagram. Do not render, hint at, or
+        spell out what a placeholder represents anywhere in the image.
+      - Do not add any label, tag, or id that isn't listed above.
+    placeholder_questions_instruction: |
+      Based strictly on the placeholder-to-concept mapping below (the answer
+      key for an exam diagram), write exactly one {question_type} question
+      per placeholder, asking the student to identify what that labelled
+      part represents. Reference the label id directly in the question
+      (e.g. "What does X represent in the diagram?").
+
+      Placeholder mapping:
+      {placeholder_summary}
+
+      Return ONLY a JSON object matching this schema:
+      {{
+        "questions": [
+          {{
+            "id": <int>,
+            "type": "<question_type>",
+            "stem": "<the question text, referencing the label id>",
+            "options": ["A...", "B...", "C...", "D..."],   // mcq only
+            "answer": "<the correct answer, from the concept>",
+            "explanation": "<one-sentence rationale>",
+            "difficulty": "easy" | "medium" | "hard"
+          }}
+        ]
+      }}
 
   audio_generate:
     # Two input modes (chosen in the UI), same pattern as
