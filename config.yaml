@@ -126,6 +126,15 @@ pricing:
       unit: per_million_chars
       rate_per_million_chars: 16.00
 
+    # Azure Speech (speech-to-text) bills per hour of audio processed, not
+    # per token -- another synthetic "model" key shared by every Azure
+    # Speech transcription call. Public "Standard" list-price estimate,
+    # unconfirmed against your Azure agreement.
+    azure-speech-stt:
+      verified: false
+      unit: per_hour_audio
+      rate_per_hour: 1.00
+
 # Single place for every language option in the app -- input (Azure Speech
 # ASR locale, used only for transcription accuracy) and output (the
 # language narration/content ends up in -- an instruction to the text

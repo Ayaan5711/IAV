@@ -69,6 +69,21 @@ class AzureSpeechUnavailable(RuntimeError):
 class AzureTranscriptionResult:
     text: str
     language: str
+    # Azure Speech bills per hour of audio processed, not per token -- best
+    # effort from the actual WAV sent to Azure; None when it couldn't be
+    # measured (cost tracking degrades gracefully in that case).
+    duration_seconds: float | None = None
+
+
+def _wav_file_duration_seconds(path: Path) -> float | None:
+    try:
+        with wave.open(str(path), "rb") as wav:
+            frames = wav.getnframes()
+            rate = wav.getframerate()
+            return frames / rate if rate else None
+    except (wave.Error, EOFError, OSError) as exc:
+        logger.warning("azure_speech: could not read duration from %s: %s", path.name, exc)
+        return None
 
 
 def is_configured() -> bool:
@@ -154,12 +169,13 @@ def transcribe_file(audio_path: Path, *, language: str = "en-US") -> AzureTransc
 
         text = " ".join(segments).strip()
         logger.info("azure_speech: recognized %d segment(s), %d chars", len(segments), len(text))
+        duration_seconds = _wav_file_duration_seconds(wav_path)  # read before cleanup deletes it
     finally:
         if cleanup:
             cleanup()
 
     if text:
-        return AzureTranscriptionResult(text=text, language=language)
+        return AzureTranscriptionResult(text=text, language=language, duration_seconds=duration_seconds)
 
     logger.info(
         "azure_speech: SDK path recognized no text -- retrying via Azure's REST endpoint "
@@ -169,7 +185,8 @@ def transcribe_file(audio_path: Path, *, language: str = "en-US") -> AzureTransc
     rest_text = _transcribe_via_rest(audio_path, language=language, key=key, region=region)
     if rest_text:
         logger.info("azure_speech: REST retry succeeded where the SDK path did not")
-        return AzureTranscriptionResult(text=rest_text, language=language)
+        rest_duration = _wav_file_duration_seconds(audio_path) or duration_seconds
+        return AzureTranscriptionResult(text=rest_text, language=language, duration_seconds=rest_duration)
 
     return AzureTranscriptionResult(text="", language=language)
 

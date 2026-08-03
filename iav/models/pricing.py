@@ -101,6 +101,9 @@ def estimate_cost(
     if unit == "per_million_chars":
         return _estimate_char_cost(model=model, entry=entry, characters=characters, verified=verified)
 
+    if unit == "per_hour_audio":
+        return _estimate_audio_duration_cost(model=model, entry=entry, duration_seconds=duration_seconds, verified=verified)
+
     notes: list[str] = []
     breakdown: dict[str, float] = {}
     input_usd = 0.0
@@ -278,6 +281,51 @@ def _estimate_char_cost(*, model: str, entry: dict[str, Any], characters: int, v
     )
 
 
+def _estimate_audio_duration_cost(
+    *, model: str, entry: dict[str, Any], duration_seconds: float, verified: bool
+) -> CostEstimate:
+    """Azure Speech (STT) bills per hour of audio processed, not per token."""
+    notes: list[str] = []
+    rate_per_hour = entry.get("rate_per_hour")
+    if rate_per_hour is None:
+        notes.append("No per-hour rate configured for this model.")
+        return CostEstimate(model=model, usd=0.0, verified=verified, notes=notes)
+    if not duration_seconds or duration_seconds <= 0:
+        notes.append("No audio duration available — cost not estimated.")
+        return CostEstimate(model=model, usd=0.0, verified=verified, notes=notes)
+    output_usd = (duration_seconds / 3600.0) * rate_per_hour
+    if not verified:
+        notes.append("Rate unverified against an official pricing source — confirm against your provider's actual billing.")
+    return CostEstimate(
+        model=model,
+        usd=output_usd,
+        verified=verified,
+        output_usd=output_usd,
+        breakdown={"output_audio_seconds": output_usd},
+        tokens={"prompt": 0, "output": 0},
+        notes=notes,
+    )
+
+
+_PROVIDER_RULES = [
+    ("Azure Speech", ("azure-speech-stt", "azure-neural-tts")),
+    ("Azure OpenAI", ("gpt-",)),
+    ("Google (Gemini / Vertex AI)", ("gemini-", "veo-")),
+]
+
+
+def provider_for_model(model: str) -> str:
+    """Classifies a model/deployment name by vendor, for grouping cost by
+    provider. Order matters: Azure Speech's exact synthetic model names are
+    checked before Azure OpenAI's broader 'gpt-' prefix.
+    """
+    name = (model or "").lower()
+    for provider, prefixes in _PROVIDER_RULES:
+        if any(name == p or name.startswith(p) for p in prefixes):
+            return provider
+    return "Other"
+
+
 def summarize_costs(calls: list[dict[str, Any]], pricing_table: dict[str, Any]) -> dict[str, Any]:
     """Roll up cost estimates across every Gemini call a capability made.
 
@@ -292,6 +340,7 @@ def summarize_costs(calls: list[dict[str, Any]], pricing_table: dict[str, Any]) 
     total_prompt_tokens = 0
     total_output_tokens = 0
     total_thoughts_tokens = 0
+    by_provider: dict[str, float] = {}
 
     for call in calls:
         est = estimate_cost(
@@ -304,13 +353,15 @@ def summarize_costs(calls: list[dict[str, Any]], pricing_table: dict[str, Any]) 
             characters=call.get("characters", 0),
             label=call.get("label", ""),
         )
-        entries.append({"label": call.get("label", call["model"]), **est.as_dict()})
+        provider = provider_for_model(call["model"])
+        entries.append({"label": call.get("label", call["model"]), "provider": provider, **est.as_dict()})
         total += est.usd
         total_input_usd += est.input_usd
         total_output_usd += est.output_usd
         total_prompt_tokens += est.tokens.get("prompt", 0)
         total_output_tokens += est.tokens.get("output", 0)
         total_thoughts_tokens += est.tokens.get("thoughts", 0)
+        by_provider[provider] = by_provider.get(provider, 0.0) + est.usd
         if not est.verified:
             any_unverified = True
 
@@ -327,6 +378,7 @@ def summarize_costs(calls: list[dict[str, Any]], pricing_table: dict[str, Any]) 
         "total_prompt_tokens": total_prompt_tokens,
         "total_output_tokens": total_output_tokens,
         "total_thoughts_tokens": total_thoughts_tokens,
+        "by_provider": {k: round(v, 6) for k, v in by_provider.items()},
         "calls": entries,
         "pricing_last_verified": (pricing_table or {}).get("last_verified"),
         "pricing_source_url": (pricing_table or {}).get("source_url"),

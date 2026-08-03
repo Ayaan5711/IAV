@@ -14,6 +14,7 @@ from pathlib import Path
 
 from iav.capabilities._json_utils import JsonParseError, parse_json_loose
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
+from iav.capabilities.prompt_schema import language_instruction_suffix
 from iav.models import image_generation
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
@@ -55,6 +56,7 @@ class ImageEnhance(Capability):
         count = int(params.get("count", self._settings.get("default_question_count", 5)))
         qtype = params.get("type") or self._settings.get("default_question_type", "mcq")
         level = params.get("level") or self._settings.get("default_level", "undergraduate")
+        language = params.get("language") or self.config.languages.get("default_output_language", "Same as input")
         azure_image_deployment = self.config.azure_openai.get("image_deployment")
         image_engine = params.get("image_engine", "auto")
 
@@ -98,8 +100,10 @@ class ImageEnhance(Capability):
         parsed: dict | None = None
         json_path = None
         if want_questions:
-            q_prompt = self._settings["questions_instruction"].format(count=count, question_type=qtype, level=level)
-            logger.info("image_enhance: generating questions from the rendered image")
+            q_prompt = self._settings["questions_instruction"].format(
+                count=count, question_type=qtype, level=level
+            ) + language_instruction_suffix(language)
+            logger.info("image_enhance: generating questions from the rendered image (language=%s)", language)
             try:
                 q_result = self.client.understand_image(
                     model=question_model, image_bytes=result.image_bytes,
@@ -148,6 +152,7 @@ class ImageEnhance(Capability):
                 "mime_type": image_mime_type,
                 "generate_questions": want_questions,
                 "question_count": len(questions) if questions else 0,
+                "question_language": language,
                 "questions_json_path": str(json_path) if json_path else None,
                 "cost": cost,
             },

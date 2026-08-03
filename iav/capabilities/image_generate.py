@@ -15,6 +15,7 @@ from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
 from iav.capabilities.prompt_schema import (
     CommonAttributes,
     common_block,
+    language_instruction_suffix,
     validate_common_attributes,
     validate_free_text,
 )
@@ -92,6 +93,7 @@ class ImageGenerate(Capability):
         count = int(params.get("count", self._settings.get("default_question_count", 5)))
         qtype = params.get("type") or self._settings.get("default_question_type", "mcq")
         level = params.get("level") or self._settings.get("default_level", "undergraduate")
+        language = params.get("language") or self.config.languages.get("default_output_language", "Same as input")
         use_label_placeholders = bool(params.get("use_label_placeholders", False))
         prompt = self._settings["prompt_template"].format(
             visual_type=visual_type,
@@ -176,10 +178,10 @@ class ImageGenerate(Capability):
                 q_prompt = self._settings["placeholder_questions_instruction"].format(
                     question_type=qtype,
                     placeholder_summary=_format_placeholder_scheme_for_questions(labels),
-                )
+                ) + language_instruction_suffix(language)
                 logger.info(
-                    "image_generate: generating questions from the label answer key (%d placeholders)",
-                    len(placeholder_entries),
+                    "image_generate: generating questions from the label answer key (%d placeholders, language=%s)",
+                    len(placeholder_entries), language,
                 )
                 try:
                     q_result = self.client.generate_text(
@@ -188,8 +190,10 @@ class ImageGenerate(Capability):
                 except GeminiCallError as exc:
                     raise ImageGenerateError(f"Question generation failed: {exc}") from exc
             else:
-                q_prompt = self._settings["questions_instruction"].format(count=count, question_type=qtype, level=level)
-                logger.info("image_generate: generating questions from the image")
+                q_prompt = self._settings["questions_instruction"].format(
+                    count=count, question_type=qtype, level=level
+                ) + language_instruction_suffix(language)
+                logger.info("image_generate: generating questions from the image (language=%s)", language)
                 try:
                     q_result = self.client.understand_image(
                         model=question_model, image_bytes=result.image_bytes, image_mime_type=image_mime_type,
@@ -233,6 +237,7 @@ class ImageGenerate(Capability):
                 "mime_type": image_mime_type,
                 "generate_questions": want_questions,
                 "question_count": len(questions) if questions else 0,
+                "question_language": language,
                 "questions_json_path": str(json_path) if json_path else None,
                 "use_label_placeholders": use_label_placeholders,
                 "label_count": len(labels) if labels else 0,

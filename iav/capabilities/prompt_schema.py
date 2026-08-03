@@ -92,3 +92,19 @@ def common_block(common: CommonAttributes) -> str:
     lines.append(f"Target audience: {common.target_audience}")
     lines.append(f"Question type: {common.question_type}")
     return "\n".join(lines)
+
+
+def language_instruction_suffix(language: str | None) -> str:
+    """Appended to a questions-generation prompt when a specific output
+    language is requested -- keeps schema/control fields (id, type,
+    difficulty) in English while translating the human-readable text
+    fields. Shared by every capability that generates the same question
+    JSON schema (image_generate, image_enhance, audio_to_audio,
+    audio_question_generation).
+    """
+    if not language or language in ("Same as input", "Same as narration"):
+        return ""
+    return (
+        f'\n\nWrite the "stem", "options", "answer", and "explanation" fields in {language}. '
+        'Keep "id", "type", and "difficulty" exactly as specified in the schema -- do not translate those.'
+    )

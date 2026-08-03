@@ -182,13 +182,22 @@ def _render_cost(metadata: dict | None) -> None:
         label += f", {thoughts_tok:,} reasoning tokens"
     with st.expander(label, expanded=False):
         if cost.get("any_unverified"):
-            st.warning("Some rates below are unverified against an official Google source.")
+            st.warning("Some rates below are unverified against an official pricing source.")
         if inr_rate:
             st.metric("Total (this result)", f"${total:.6f}", delta=f"₹{total * inr_rate:.2f}", delta_color="off")
             st.caption(f"Converted at ₹{inr_rate:.2f} / $1 (rate entered manually in the sidebar).")
+        by_provider = cost.get("by_provider") or {}
+        if len(by_provider) > 1:
+            st.markdown("**By provider**")
+            pcols = st.columns(len(by_provider))
+            for pcol, (provider, amount) in zip(pcols, by_provider.items()):
+                pcol.metric(provider, f"${amount:.6f}")
+            st.divider()
         for call in calls:
             badge = "verified" if call.get("verified") else "⚠ unverified"
-            st.markdown(f"**{call.get('label', call.get('model'))}** — `{call.get('model')}` — {badge}")
+            provider = call.get("provider")
+            provider_tag = f" — {provider}" if provider else ""
+            st.markdown(f"**{call.get('label', call.get('model'))}** — `{call.get('model')}`{provider_tag} — {badge}")
             tok = call.get("tokens", {})
             input_usd = call.get("input_usd", 0.0)
             output_usd = call.get("output_usd", 0.0)
@@ -336,17 +345,17 @@ def _show_validation_errors(errors: list[str]) -> bool:
     return not errors
 
 
-def _questions_toggle_form(key_prefix: str, default_count: int = 5) -> tuple[bool, int, str, str]:
-    """Optional 'generate comprehension questions' checkbox + count/type/level.
+def _questions_toggle_form(key_prefix: str, default_count: int = 5) -> tuple[bool, int, str, str, str]:
+    """Optional 'generate comprehension questions' checkbox + count/type/level/language.
 
     Shared across every tab that can optionally quiz on its own output.
     """
     want_questions = st.checkbox(
         "Also generate comprehension questions from this content", value=False, key=f"{key_prefix}-genq"
     )
-    count, qtype, level = default_count, "mcq", "undergraduate"
+    count, qtype, level, language = default_count, "mcq", "undergraduate", "Same as input"
     if want_questions:
-        cols = st.columns(3)
+        cols = st.columns(4)
         count = cols[0].number_input(
             "Number of questions", min_value=1, max_value=20, value=default_count, key=f"{key_prefix}-genq-count"
         )
@@ -356,14 +365,24 @@ def _questions_toggle_form(key_prefix: str, default_count: int = 5) -> tuple[boo
         level = cols[2].selectbox(
             "Level", ["school", "undergraduate", "postgraduate"], index=1, key=f"{key_prefix}-genq-level"
         )
-    return want_questions, int(count), qtype, level
+        output_languages = load_config().languages.get("output_languages") or ["Same as input"]
+        language = cols[3].selectbox(
+            "Question language", output_languages, key=f"{key_prefix}-genq-lang",
+            help="Writes the question text in this language, independent of whatever language "
+                 "the source content is in.",
+        )
+    return want_questions, int(count), qtype, level, language
 
 
 def _render_questions_block(meta: dict, data, key_prefix: str) -> None:
     """Renders the optional questions JSON + download button, if any were generated."""
     if not meta.get("generate_questions") or not data:
         return
-    with st.expander(f"Questions ({meta.get('question_count', '?')})"):
+    q_language = meta.get("question_language")
+    label = f"Questions ({meta.get('question_count', '?')})"
+    if q_language and q_language not in ("Same as input", "Same as narration"):
+        label += f" — in {q_language}"
+    with st.expander(label):
         st.json(data)
     q_path = meta.get("questions_json_path")
     if q_path and Path(q_path).exists():
@@ -401,7 +420,7 @@ def _image_enhance_tab() -> None:
         key="ie-instruction",
     )
 
-    want_questions, q_count, q_type, q_level = _questions_toggle_form(
+    want_questions, q_count, q_type, q_level, q_language = _questions_toggle_form(
         "ie", default_count=int(s.get("default_question_count", 5))
     )
 
@@ -443,6 +462,7 @@ def _image_enhance_tab() -> None:
                             "count": q_count,
                             "type": q_type,
                             "level": q_level,
+                            "language": q_language,
                             "image_engine": image_engine,
                         },
                     )
@@ -673,17 +693,23 @@ def _audio_to_audio_tab() -> None:
 
     output_languages = langs.get("output_languages") or ["Same as input"]
     target_language = st.selectbox(
-        "Output language",
+        "Narration language",
         output_languages,
         index=_idx(output_languages, langs.get("default_output_language")),
         key="a2a-targetlang",
         help="Translates the final script into this language before narration. "
-             "\"Same as input\" skips translation entirely.",
+             "\"Same as input\" skips translation entirely. The comprehension questions below "
+             "have their own, independent language setting.",
     )
 
-    generate_questions, count, qtype, level = _questions_toggle_form(
+    generate_questions, count, qtype, level, question_language = _questions_toggle_form(
         "a2a", default_count=int(s.get("default_question_count", 5))
     )
+    if generate_questions and question_language != "Same as input":
+        st.caption(
+            f"ℹ Narration stays in \"{target_language}\"; only the question text is written in "
+            f"\"{question_language}\"."
+        )
 
     with st.expander("Advanced options", expanded=False):
         cols2 = st.columns(3)
@@ -725,6 +751,7 @@ def _audio_to_audio_tab() -> None:
                     "count": int(count),
                     "type": qtype,
                     "level": level,
+                    "question_language": question_language,
                 }
                 if mode == "upload":
                     suffix = Path(uploaded.name).suffix or ""
@@ -775,6 +802,9 @@ def _render_audio_to_audio_output(result) -> None:  # type: ignore[no-untyped-de
     target_language = meta.get("target_language")
     if target_language and target_language != "Same as input":
         st.caption(f"🌐 Translated into {target_language} before narration.")
+    question_language = meta.get("question_language")
+    if question_language and question_language != "Same as narration":
+        st.caption(f"🌐 Questions written in {question_language}, independent of the narration language.")
     if meta.get("raw_transcript"):
         with st.expander("Transcript"):
             st.text(meta["raw_transcript"])
@@ -785,8 +815,6 @@ def _render_audio_to_audio_output(result) -> None:  # type: ignore[no-untyped-de
         with st.expander("Script used for narration"):
             st.text(result.text)
     _render_questions_block(meta, result.data, "a2a")
-    if (meta.get("asr_engine") or "").startswith("Azure"):
-        st.caption("ℹ Azure Speech transcription is billed separately by Azure — not included in the cost estimate below.")
     _render_cost(meta)
 
 
@@ -820,13 +848,20 @@ def _audio_questions_tab() -> None:
 
     langs = load_config().languages
     output_languages = langs.get("output_languages") or ["Same as input"]
-    target_language = st.selectbox(
-        "Output language",
+    lang_cols = st.columns(2)
+    target_language = lang_cols[0].selectbox(
+        "Narration language",
         output_languages,
         index=_idx(output_languages, langs.get("default_output_language")),
         key="aq-targetlang",
-        help="Translates the passage into this language before narration and question "
-             "generation. \"Same as input\" skips translation entirely.",
+        help="Translates the passage into this language before narration. \"Same as input\" "
+             "skips translation entirely.",
+    )
+    question_language = lang_cols[1].selectbox(
+        "Question language",
+        ["Same as narration"] + list(output_languages),
+        key="aq-questionlang",
+        help="Writes the questions in this language, independent of the narration language above.",
     )
 
     cols = st.columns(2)
@@ -888,6 +923,7 @@ def _audio_questions_tab() -> None:
                             "text_model": text_model,
                             "engine": engine,
                             "target_language": target_language,
+                            "question_language": question_language,
                             "voice": voice,
                             "tts_engine": tts_engine,
                             "multi_speaker": multi_speaker,
@@ -921,6 +957,9 @@ def _render_audio_questions_output(result) -> None:  # type: ignore[no-untyped-d
     target_language = meta.get("target_language")
     if target_language and target_language != "Same as input":
         st.caption(f"🌐 Translated into {target_language} before narration.")
+    question_language = meta.get("question_language")
+    if question_language and question_language != "Same as narration":
+        st.caption(f"🌐 Questions written in {question_language}, independent of the narration language.")
     if meta.get("mode") == "topic" and meta.get("passage"):
         with st.expander("Generated passage"):
             st.write(meta["passage"])
@@ -934,6 +973,10 @@ def _render_audio_questions_output(result) -> None:  # type: ignore[no-untyped-d
                 mime="audio/wav",
             )
     if result.text:
+        label = "Questions"
+        if question_language and question_language != "Same as narration":
+            label += f" ({question_language})"
+        st.markdown(f"**{label}**")
         st.markdown(result.text)
     if result.data:
         with st.expander("Raw questions JSON"):
@@ -976,11 +1019,11 @@ def _generate_image_tab() -> None:
         ),
     )
 
-    want_questions, q_count, q_type, q_level = _questions_toggle_form(
+    want_questions, q_count, q_type, q_level, q_language = _questions_toggle_form(
         "gi", default_count=int(s.get("default_question_count", 5))
     )
     if use_label_placeholders and want_questions:
-        st.caption("Question count/type/level above are ignored in placeholder mode — one question is generated per placeholder.")
+        st.caption("Question count/type/level above are ignored in placeholder mode — one question is generated per placeholder. Question language still applies.")
     if use_label_placeholders and VENDOR_ENGINE != "gemini":
         st.caption(
             "ℹ If this ends up rendering via Azure DALL-E-3 (see Vendor in the sidebar), its "
@@ -1031,6 +1074,7 @@ def _generate_image_tab() -> None:
                             "count": q_count,
                             "type": q_type,
                             "level": q_level,
+                            "language": q_language,
                             "use_label_placeholders": use_label_placeholders,
                             "image_engine": image_engine,
                         },
