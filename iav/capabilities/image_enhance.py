@@ -83,9 +83,13 @@ class ImageEnhance(Capability):
                 engine=image_engine,
             )
         except image_generation.ImageGenerationError as exc:
-            raise ImageEnhanceError(
-                f"{exc} (a Gemini failure here typically means a safety filter blocked the output)"
-            ) from exc
+            hint = (
+                " (Azure image generation isn't available in this environment -- check 'Allow "
+                "Gemini for image generation' above if you want Gemini to handle this step instead.)"
+                if image_engine == "azure"
+                else " (a Gemini failure here typically means a safety filter blocked the output.)"
+            )
+            raise ImageEnhanceError(f"{exc}{hint}") from exc
 
         image_mime_type = result.image_mime_type
         output_path = save_output(

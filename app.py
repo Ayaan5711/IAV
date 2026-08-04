@@ -104,6 +104,29 @@ def _show_vendor_selector() -> str:
         return engine
 
 
+def _resolve_image_engine(key_prefix: str) -> str:
+    """Under Azure-only, image generation would otherwise hard-fail on every
+    call -- Azure OpenAI image generation isn't available in this
+    environment (confirmed against gpt-image-1-mini). Rather than silently
+    mixing in Gemini or blocking image capabilities entirely, this asks
+    explicitly: the exception only applies when the user consciously checks
+    it, and only to image generation -- everything else on the tab still
+    strictly follows the sidebar Vendor setting.
+    """
+    if VENDOR_ENGINE != "azure":
+        return VENDOR_ENGINE
+    allow_gemini = st.checkbox(
+        "Allow Gemini for image generation (Azure image generation isn't available in this environment)",
+        value=False,
+        key=f"{key_prefix}-geminiimgexception",
+        help="Vendor is set to Azure only. Azure OpenAI image generation isn't currently available "
+             "here, so image generation would otherwise fail on every request. Check this to allow "
+             "Gemini to handle image generation specifically, as an explicit one-off exception -- "
+             "every other step on this tab stays on Azure.",
+    )
+    return "gemini" if allow_gemini else "azure"
+
+
 def _idx(options: list | None, value: Any) -> int:
     if not options:
         return 0
@@ -437,7 +460,7 @@ def _image_enhance_tab() -> None:
             "Question-generation model", text_models, index=_idx(text_models, s.get("question_model")),
             key="ie-qmodel", disabled=not want_questions,
         )
-    image_engine = VENDOR_ENGINE
+    image_engine = _resolve_image_engine("ie")
 
     if st.button("Process", type="primary", key="ie-go"):
         if uploaded is None:
@@ -1045,7 +1068,7 @@ def _generate_image_tab() -> None:
             "Question-generation model", text_models, index=_idx(text_models, s.get("question_model")),
             key="gi-qmodel", disabled=not (want_questions or use_label_placeholders),
         )
-    image_engine = VENDOR_ENGINE
+    image_engine = _resolve_image_engine("gi")
 
     if st.button("Generate", type="primary", key="gi-go"):
         errors = validate_common_attributes(common) + validate_free_text(free_text)

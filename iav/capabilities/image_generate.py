@@ -61,6 +61,47 @@ def _format_placeholder_scheme_for_questions(labels: list[dict]) -> str:
     )
 
 
+def _validate_label_scheme(labels: object) -> list[str]:
+    """Programmatic checks on the label-design step's output -- catches a
+    bad/duplicate id before it reaches the image render or the questions,
+    rather than trusting the model's "never reuse an id" instruction alone.
+    """
+    if not isinstance(labels, list) or not labels:
+        return ["Label design returned no labels."]
+
+    errors: list[str] = []
+    seen_ids: set[str] = set()
+    has_placeholder = False
+    for item in labels:
+        if not isinstance(item, dict):
+            errors.append(f"Label entry is not an object: {item!r}")
+            continue
+        lid = item.get("id")
+        if not isinstance(lid, str) or not lid.strip():
+            errors.append(f"Label entry has no valid 'id': {item!r}")
+            continue
+        if lid in seen_ids:
+            errors.append(f"Duplicate label id '{lid}' -- every id must be unique.")
+        seen_ids.add(lid)
+
+        kind = item.get("kind")
+        if kind == "given":
+            value = item.get("value")
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"Label '{lid}' is 'given' but has no value to render.")
+        elif kind == "placeholder":
+            has_placeholder = True
+            concept = item.get("concept")
+            if not isinstance(concept, str) or not concept.strip():
+                errors.append(f"Label '{lid}' is 'placeholder' but has no concept for the answer key.")
+        else:
+            errors.append(f"Label '{lid}' has an invalid 'kind' ({kind!r}); must be 'given' or 'placeholder'.")
+
+    if not has_placeholder:
+        errors.append("No 'placeholder' labels were designed -- nothing for the questions to ask about.")
+    return errors
+
+
 class ImageGenerate(Capability):
     name = "image_generate"
 
@@ -68,6 +109,34 @@ class ImageGenerate(Capability):
         self.config = config or load_config()
         self.client = client or get_client(self.config)
         self._settings = self.config.capability(self.name)
+
+    def _run_label_design(self, prompt: str, model: str) -> tuple[list[dict], dict]:
+        """One label-design attempt: call, parse, return (labels, call_record).
+
+        Raises on a hard failure (no text / bad JSON) -- validating the
+        *content* (unique ids, complete entries) happens separately in the
+        caller, which decides whether to retry.
+        """
+        try:
+            design_result = self.client.generate_text(
+                model=model, prompt=prompt, response_mime_type="application/json",
+            )
+        except GeminiCallError as exc:
+            raise ImageGenerateError(f"Label design failed: {exc}") from exc
+        call_record = {"label": "design_labels", "model": model, "usage": design_result.usage}
+
+        design_raw = (design_result.text or "").strip()
+        if not design_raw:
+            raise ImageGenerateError("Label design returned no text.")
+        try:
+            design_parsed = parse_json_loose(design_raw)
+        except JsonParseError as exc:
+            raise ImageGenerateError(str(exc)) from exc
+
+        labels = design_parsed.get("labels") if isinstance(design_parsed, dict) else None
+        if not isinstance(labels, list) or not labels:
+            raise ImageGenerateError("Label design returned no usable labels.")
+        return labels, call_record
 
     def process(self, payload: CapabilityInput) -> CapabilityOutput:
         free_text = (payload.text or payload.instruction or "").strip()
@@ -109,25 +178,27 @@ class ImageGenerate(Capability):
         if use_label_placeholders:
             design_prompt = self._settings["label_design_instruction"].format(free_text=free_text)
             logger.info("image_generate: designing label scheme before rendering")
-            try:
-                design_result = self.client.generate_text(
-                    model=question_model, prompt=design_prompt, response_mime_type="application/json",
+            labels, design_call = self._run_label_design(design_prompt, question_model)
+            calls.append(design_call)
+
+            label_errors = _validate_label_scheme(labels)
+            if label_errors:
+                logger.warning(
+                    "image_generate: label design had %d issue(s), retrying once: %s",
+                    len(label_errors), "; ".join(label_errors),
                 )
-            except GeminiCallError as exc:
-                raise ImageGenerateError(f"Label design failed: {exc}") from exc
-            calls.append({"label": "design_labels", "model": question_model, "usage": design_result.usage})
-
-            design_raw = (design_result.text or "").strip()
-            if not design_raw:
-                raise ImageGenerateError("Label design returned no text.")
-            try:
-                design_parsed = parse_json_loose(design_raw)
-            except JsonParseError as exc:
-                raise ImageGenerateError(str(exc)) from exc
-
-            labels = design_parsed.get("labels") if isinstance(design_parsed, dict) else None
-            if not isinstance(labels, list) or not labels:
-                raise ImageGenerateError("Label design returned no usable labels.")
+                retry_prompt = design_prompt + (
+                    "\n\nYour previous attempt had these problems -- fix them exactly:\n"
+                    + "\n".join(f"- {e}" for e in label_errors)
+                )
+                labels, retry_call = self._run_label_design(retry_prompt, question_model)
+                retry_call["label"] = "design_labels_retry"
+                calls.append(retry_call)
+                label_errors = _validate_label_scheme(labels)
+                if label_errors:
+                    raise ImageGenerateError(
+                        "Label design still has problems after a retry: " + "; ".join(label_errors)
+                    )
 
             prompt = prompt + "\n\n" + self._settings["label_render_instruction"].format(
                 label_summary=_format_label_scheme_for_render(labels)
@@ -155,9 +226,13 @@ class ImageGenerate(Capability):
                 engine=image_engine,
             )
         except image_generation.ImageGenerationError as exc:
-            raise ImageGenerateError(
-                f"{exc} (a Gemini failure here typically means a safety filter blocked the output)"
-            ) from exc
+            hint = (
+                " (Azure image generation isn't available in this environment -- check 'Allow "
+                "Gemini for image generation' above if you want Gemini to handle this step instead.)"
+                if image_engine == "azure"
+                else " (a Gemini failure here typically means a safety filter blocked the output.)"
+            )
+            raise ImageGenerateError(f"{exc}{hint}") from exc
 
         image_mime_type = result.image_mime_type
         suffix = ".jpg" if image_mime_type == "image/jpeg" else ".png"
