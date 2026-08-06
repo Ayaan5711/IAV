@@ -17,7 +17,7 @@ from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
 from iav.capabilities.prompt_schema import language_instruction_suffix
 from iav.models import image_generation
 from iav.models.config import Config, load_config
-from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
+from iav.models.gemini_client import GeminiClient, get_client
 from iav.models.pricing import summarize_costs
 from iav.storage import save_output
 
@@ -59,6 +59,12 @@ class ImageEnhance(Capability):
         language = params.get("language") or self.config.languages.get("default_output_language", "Same as input")
         azure_image_deployment = self.config.azure_openai.get("image_deployment")
         image_engine = params.get("image_engine", "auto")
+        # Question generation is a Chat Completions (vision) capability, a
+        # different Azure surface than the Images API render above -- it
+        # follows azure_openai.default_deployment (the chat/text
+        # deployment), not the image deployment, and its own engine choice.
+        azure_deployment = self.config.azure_openai.get("default_deployment")
+        engine = params.get("engine", "auto")
 
         logger.info(
             "image_enhance: invoking model=%s resolution=%s on file=%s (%d bytes) image_engine=%s",
@@ -103,20 +109,27 @@ class ImageEnhance(Capability):
         questions: list | None = None
         parsed: dict | None = None
         json_path = None
+        question_engine: str | None = None
         if want_questions:
             q_prompt = self._settings["questions_instruction"].format(
                 count=count, question_type=qtype, level=level
             ) + language_instruction_suffix(language)
-            logger.info("image_enhance: generating questions from the rendered image (language=%s)", language)
+            logger.info(
+                "image_enhance: generating questions from the rendered image (language=%s, engine=%s)",
+                language, engine,
+            )
             try:
-                q_result = self.client.understand_image(
-                    model=question_model, image_bytes=result.image_bytes,
-                    image_mime_type=image_mime_type or "image/png",
-                    instruction=q_prompt, response_mime_type="application/json",
+                q_result = image_generation.understand_image(
+                    gemini_client=self.client, gemini_model=question_model,
+                    image_bytes=result.image_bytes, image_mime_type=image_mime_type or "image/png",
+                    instruction=q_prompt, label="generate_questions",
+                    response_mime_type="application/json",
+                    azure_deployment=azure_deployment, engine=engine,
                 )
-            except GeminiCallError as exc:
+            except image_generation.ImageGenerationError as exc:
                 raise ImageEnhanceError(f"Question generation failed: {exc}") from exc
-            calls.append({"label": "generate_questions", "model": question_model, "usage": q_result.usage})
+            calls.append(q_result.call_record)
+            question_engine = q_result.engine
 
             q_raw = (q_result.text or "").strip()
             if not q_raw:
@@ -157,6 +170,7 @@ class ImageEnhance(Capability):
                 "generate_questions": want_questions,
                 "question_count": len(questions) if questions else 0,
                 "question_language": language,
+                "question_engine": question_engine,
                 "questions_json_path": str(json_path) if json_path else None,
                 "cost": cost,
             },

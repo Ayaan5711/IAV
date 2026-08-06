@@ -461,6 +461,7 @@ def _image_enhance_tab() -> None:
             key="ie-qmodel", disabled=not want_questions,
         )
     image_engine = _resolve_image_engine("ie")
+    engine = VENDOR_ENGINE  # question generation follows the sidebar Vendor as-is, no exception needed
 
     if st.button("Process", type="primary", key="ie-go"):
         if uploaded is None:
@@ -487,6 +488,7 @@ def _image_enhance_tab() -> None:
                             "level": q_level,
                             "language": q_language,
                             "image_engine": image_engine,
+                            "engine": engine,
                         },
                     )
                 )
@@ -496,6 +498,8 @@ def _image_enhance_tab() -> None:
             st.image(str(result.file_path), caption=result.file_path.name)
             if result.metadata.get("image_engine"):
                 st.caption(f"Rendered via: {result.metadata['image_engine']}")
+            if result.metadata.get("question_engine"):
+                st.caption(f"Questions via: {result.metadata['question_engine']}")
             if result.metadata.get("revised_prompt"):
                 with st.expander("⚠ Azure rewrote this instruction before rendering"):
                     st.caption("DALL-E-3 rewrites prompts internally before rendering — this is what it actually used.")
@@ -1046,7 +1050,7 @@ def _generate_image_tab() -> None:
         "gi", default_count=int(s.get("default_question_count", 5))
     )
     if use_label_placeholders and want_questions:
-        st.caption("Question count/type/level above are ignored in placeholder mode — one question is generated per placeholder. Question language still applies.")
+        st.caption("Count and level above are ignored in placeholder mode — one question is generated per placeholder, at whatever level the label design implies. Question type and language still apply.")
     if use_label_placeholders and VENDOR_ENGINE != "gemini":
         st.caption(
             "ℹ If this ends up rendering via Azure DALL-E-3 (see Vendor in the sidebar), its "
@@ -1069,6 +1073,7 @@ def _generate_image_tab() -> None:
             key="gi-qmodel", disabled=not (want_questions or use_label_placeholders),
         )
     image_engine = _resolve_image_engine("gi")
+    engine = VENDOR_ENGINE  # label design/question generation follow the sidebar Vendor as-is, no exception needed
 
     if st.button("Generate", type="primary", key="gi-go"):
         errors = validate_common_attributes(common) + validate_free_text(free_text)
@@ -1100,6 +1105,7 @@ def _generate_image_tab() -> None:
                             "language": q_language,
                             "use_label_placeholders": use_label_placeholders,
                             "image_engine": image_engine,
+                            "engine": engine,
                         },
                     )
                 )
@@ -1109,6 +1115,8 @@ def _generate_image_tab() -> None:
             st.image(str(result.file_path), caption=result.file_path.name)
             if result.metadata.get("image_engine"):
                 st.caption(f"Rendered via: {result.metadata['image_engine']}")
+            if result.metadata.get("question_engine"):
+                st.caption(f"Questions via: {result.metadata['question_engine']}")
             with result.file_path.open("rb") as fh:
                 st.download_button(
                     "Download", data=fh.read(), file_name=result.file_path.name,

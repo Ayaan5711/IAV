@@ -23,6 +23,7 @@ from iav.models import image_generation
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
 from iav.models.pricing import summarize_costs
+from iav.models.text_generation import TextGenerationError, generate_text
 from iav.storage import save_output
 
 logger = logging.getLogger(__name__)
@@ -110,22 +111,31 @@ class ImageGenerate(Capability):
         self.client = client or get_client(self.config)
         self._settings = self.config.capability(self.name)
 
-    def _run_label_design(self, prompt: str, model: str) -> tuple[list[dict], dict]:
+    def _run_label_design(
+        self, prompt: str, model: str, *, azure_deployment: str | None, engine: str
+    ) -> tuple[list[dict], dict]:
         """One label-design attempt: call, parse, return (labels, call_record).
+
+        Pure text in/out (no image bytes involved yet), so this goes through
+        the same Auto/Gemini/Azure text dispatcher every other text-only step
+        in the app uses -- it should follow the selected vendor exactly like
+        text generation does elsewhere, not be hardcoded to Gemini.
 
         Raises on a hard failure (no text / bad JSON) -- validating the
         *content* (unique ids, complete entries) happens separately in the
         caller, which decides whether to retry.
         """
         try:
-            design_result = self.client.generate_text(
-                model=model, prompt=prompt, response_mime_type="application/json",
+            design_result = generate_text(
+                gemini_client=self.client, gemini_model=model, prompt=prompt,
+                label="design_labels", azure_deployment=azure_deployment, engine=engine,
+                response_mime_type="application/json",
             )
-        except GeminiCallError as exc:
+        except (GeminiCallError, TextGenerationError) as exc:
             raise ImageGenerateError(f"Label design failed: {exc}") from exc
-        call_record = {"label": "design_labels", "model": model, "usage": design_result.usage}
+        call_record = design_result.call_record
 
-        design_raw = (design_result.text or "").strip()
+        design_raw = design_result.text.strip()
         if not design_raw:
             raise ImageGenerateError("Label design returned no text.")
         try:
@@ -164,6 +174,12 @@ class ImageGenerate(Capability):
         level = params.get("level") or self._settings.get("default_level", "undergraduate")
         language = params.get("language") or self.config.languages.get("default_output_language", "Same as input")
         use_label_placeholders = bool(params.get("use_label_placeholders", False))
+        # Text-only steps (label design, question generation) -- separate
+        # from image_engine below, which only governs the Images API
+        # generate/edit call. This one follows azure_openai.default_deployment
+        # (the chat/text deployment), not the image deployment.
+        azure_deployment = self.config.azure_openai.get("default_deployment")
+        engine = params.get("engine", "auto")
         prompt = self._settings["prompt_template"].format(
             visual_type=visual_type,
             style=style,
@@ -177,8 +193,10 @@ class ImageGenerate(Capability):
 
         if use_label_placeholders:
             design_prompt = self._settings["label_design_instruction"].format(free_text=free_text)
-            logger.info("image_generate: designing label scheme before rendering")
-            labels, design_call = self._run_label_design(design_prompt, question_model)
+            logger.info("image_generate: designing label scheme before rendering (engine=%s)", engine)
+            labels, design_call = self._run_label_design(
+                design_prompt, question_model, azure_deployment=azure_deployment, engine=engine
+            )
             calls.append(design_call)
 
             label_errors = _validate_label_scheme(labels)
@@ -191,7 +209,9 @@ class ImageGenerate(Capability):
                     "\n\nYour previous attempt had these problems -- fix them exactly:\n"
                     + "\n".join(f"- {e}" for e in label_errors)
                 )
-                labels, retry_call = self._run_label_design(retry_prompt, question_model)
+                labels, retry_call = self._run_label_design(
+                    retry_prompt, question_model, azure_deployment=azure_deployment, engine=engine
+                )
                 retry_call["label"] = "design_labels_retry"
                 calls.append(retry_call)
                 label_errors = _validate_label_scheme(labels)
@@ -210,8 +230,9 @@ class ImageGenerate(Capability):
         image_engine = params.get("image_engine", "auto")
 
         logger.info(
-            "image_generate: model=%s visual_type=%s style=%s resolution=%s label_placeholders=%s image_engine=%s",
-            model, visual_type, style, resolution, use_label_placeholders, image_engine,
+            "image_generate: model=%s visual_type=%s style=%s resolution=%s label_placeholders=%s "
+            "image_engine=%s text_engine=%s",
+            model, visual_type, style, resolution, use_label_placeholders, image_engine, engine,
         )
 
         try:
@@ -243,6 +264,7 @@ class ImageGenerate(Capability):
         questions: list | None = None
         parsed: dict | None = None
         json_path = None
+        question_engine: str | None = None
         if want_questions:
             # Placeholder entries carry their own answer key -- grounding the
             # question call in that key (no image bytes needed) instead of
@@ -255,28 +277,38 @@ class ImageGenerate(Capability):
                     placeholder_summary=_format_placeholder_scheme_for_questions(labels),
                 ) + language_instruction_suffix(language)
                 logger.info(
-                    "image_generate: generating questions from the label answer key (%d placeholders, language=%s)",
-                    len(placeholder_entries), language,
+                    "image_generate: generating questions from the label answer key "
+                    "(%d placeholders, language=%s, engine=%s)",
+                    len(placeholder_entries), language, engine,
                 )
                 try:
-                    q_result = self.client.generate_text(
-                        model=question_model, prompt=q_prompt, response_mime_type="application/json",
+                    q_result = generate_text(
+                        gemini_client=self.client, gemini_model=question_model, prompt=q_prompt,
+                        label="generate_questions", azure_deployment=azure_deployment, engine=engine,
+                        response_mime_type="application/json",
                     )
-                except GeminiCallError as exc:
+                except (GeminiCallError, TextGenerationError) as exc:
                     raise ImageGenerateError(f"Question generation failed: {exc}") from exc
             else:
                 q_prompt = self._settings["questions_instruction"].format(
                     count=count, question_type=qtype, level=level
                 ) + language_instruction_suffix(language)
-                logger.info("image_generate: generating questions from the image (language=%s)", language)
+                logger.info(
+                    "image_generate: generating questions from the image (language=%s, engine=%s)",
+                    language, engine,
+                )
                 try:
-                    q_result = self.client.understand_image(
-                        model=question_model, image_bytes=result.image_bytes, image_mime_type=image_mime_type,
-                        instruction=q_prompt, response_mime_type="application/json",
+                    q_result = image_generation.understand_image(
+                        gemini_client=self.client, gemini_model=question_model,
+                        image_bytes=result.image_bytes, image_mime_type=image_mime_type,
+                        instruction=q_prompt, label="generate_questions",
+                        response_mime_type="application/json",
+                        azure_deployment=azure_deployment, engine=engine,
                     )
-                except GeminiCallError as exc:
+                except image_generation.ImageGenerationError as exc:
                     raise ImageGenerateError(f"Question generation failed: {exc}") from exc
-            calls.append({"label": "generate_questions", "model": question_model, "usage": q_result.usage})
+            calls.append(q_result.call_record)
+            question_engine = q_result.engine
 
             q_raw = (q_result.text or "").strip()
             if not q_raw:
@@ -313,6 +345,7 @@ class ImageGenerate(Capability):
                 "generate_questions": want_questions,
                 "question_count": len(questions) if questions else 0,
                 "question_language": language,
+                "question_engine": question_engine,
                 "questions_json_path": str(json_path) if json_path else None,
                 "use_label_placeholders": use_label_placeholders,
                 "label_count": len(labels) if labels else 0,
