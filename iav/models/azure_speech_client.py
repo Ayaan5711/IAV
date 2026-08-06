@@ -21,6 +21,7 @@ import subprocess
 import tempfile
 import threading
 import wave
+import xml.sax.saxutils as saxutils
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -414,6 +415,14 @@ def synthesize_speech(text: str, *, voice: str) -> bytes:
     Single-voice only -- Azure Neural TTS here doesn't do the multi-speaker
     dialogue Gemini's TTS supports; callers should route multi-speaker
     requests to Gemini regardless of the selected engine.
+
+    Tries the SDK first, then falls back to the REST endpoint. The SDK's
+    WebSocket transport does its own TLS/network handling independent of
+    Python's `ssl` module, so the truststore fix above (which only helps
+    `requests`-based calls) doesn't reach it -- behind a proxy that blocks
+    or mishandles WebSocket upgrades while plain HTTPS still works, the SDK
+    path fails with a connection error even though the REST path succeeds.
+    Same shape as _transcribe_via_rest()'s relationship to the SDK ASR path.
     """
     if not _SDK_AVAILABLE:
         raise AzureSpeechUnavailable("azure-cognitiveservices-speech is not installed.")
@@ -423,6 +432,21 @@ def synthesize_speech(text: str, *, voice: str) -> bytes:
     if not key or not region:
         raise AzureSpeechUnavailable("AZURE_SPEECH_KEY / AZURE_SPEECH_REGION are not set.")
 
+    try:
+        return _synthesize_via_sdk(text, voice=voice, key=key, region=region)
+    except AzureSpeechUnavailable as sdk_exc:
+        logger.warning(
+            "azure_speech: SDK-based synthesis failed, retrying via REST endpoint: %s", sdk_exc
+        )
+        try:
+            return _synthesize_via_rest(text, voice=voice, key=key, region=region)
+        except AzureSpeechUnavailable as rest_exc:
+            raise AzureSpeechUnavailable(
+                f"Both the SDK and REST synthesis paths failed. SDK: {sdk_exc} | REST: {rest_exc}"
+            ) from rest_exc
+
+
+def _synthesize_via_sdk(text: str, *, voice: str, key: str, region: str) -> bytes:
     speech_config = speechsdk.SpeechConfig(subscription=key, region=region)
     speech_config.speech_synthesis_voice_name = voice
     speech_config.set_speech_synthesis_output_format(
@@ -432,12 +456,12 @@ def synthesize_speech(text: str, *, voice: str) -> bytes:
     # to a speaker or writing it to a file, since this runs headless.
     synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=None)
 
-    logger.info("azure_speech: synthesizing speech (voice=%s, chars=%d)", voice, len(text))
+    logger.info("azure_speech: synthesizing speech via SDK (voice=%s, chars=%d)", voice, len(text))
     result = synthesizer.speak_text_async(text).get()
 
     if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
         audio_bytes = result.audio_data
-        logger.info("azure_speech: synthesis completed (%d bytes)", len(audio_bytes))
+        logger.info("azure_speech: SDK synthesis completed (%d bytes)", len(audio_bytes))
         return audio_bytes
 
     if result.reason == speechsdk.ResultReason.Canceled:
@@ -446,3 +470,36 @@ def synthesize_speech(text: str, *, voice: str) -> bytes:
             f"Azure Speech synthesis canceled: {details.reason} -- {details.error_details}"
         )
     raise AzureSpeechUnavailable(f"Azure Speech synthesis failed: reason={result.reason}")
+
+
+def _synthesize_via_rest(text: str, *, voice: str, key: str, region: str) -> bytes:
+    """Azure Neural TTS via the REST endpoint -- plain HTTPS POST, no
+    WebSocket, so it benefits from the truststore fix the same way the
+    speech-to-text REST fallback does.
+    """
+    url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
+    ssml = (
+        "<speak version='1.0' xml:lang='en-US'>"
+        f"<voice xml:lang='en-US' name='{saxutils.escape(voice)}'>"
+        f"{saxutils.escape(text)}"
+        "</voice></speak>"
+    )
+    headers = {
+        "Ocp-Apim-Subscription-Key": key,
+        "Content-Type": "application/ssml+xml",
+        "X-Microsoft-OutputFormat": "riff-24khz-16bit-mono-pcm",
+        "User-Agent": "iav-azure-speech-rest",
+    }
+    logger.info("azure_speech: synthesizing speech via REST (voice=%s, chars=%d)", voice, len(text))
+    try:
+        resp = requests.post(url, headers=headers, data=ssml.encode("utf-8"), timeout=REST_TIMEOUT_SECONDS)
+    except requests.RequestException as exc:
+        raise AzureSpeechUnavailable(f"REST TTS call failed: {exc}") from exc
+
+    if resp.status_code != 200:
+        raise AzureSpeechUnavailable(f"REST TTS returned HTTP {resp.status_code}: {resp.text[:300]}")
+    if not resp.content:
+        raise AzureSpeechUnavailable("REST TTS returned an empty response body.")
+
+    logger.info("azure_speech: REST synthesis completed (%d bytes)", len(resp.content))
+    return resp.content
