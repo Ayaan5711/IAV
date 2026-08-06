@@ -124,7 +124,9 @@ class AudioQuestionGeneration(Capability):
         # of the narration language above, so the narrated audio can stay in
         # one language while the questions are written in another.
         question_source = passage
-        if question_language and question_language not in ("Same as narration",) and question_language != target_language:
+        if question_language == "Same as input":
+            question_source = original_passage
+        elif question_language and question_language not in ("Same as narration",) and question_language != target_language:
             translate_template = self.config.languages.get("translate_instruction")
             if not translate_template:
                 raise AudioQuestionGenerationError("No translate_instruction configured under languages: in config.yaml.")

@@ -170,26 +170,32 @@ def transcribe_file(audio_path: Path, *, language: str = "en-US") -> AzureTransc
 
         text = " ".join(segments).strip()
         logger.info("azure_speech: recognized %d segment(s), %d chars", len(segments), len(text))
-        duration_seconds = _wav_file_duration_seconds(wav_path)  # read before cleanup deletes it
+        duration_seconds = _wav_file_duration_seconds(wav_path)
+
+        if text:
+            return AzureTranscriptionResult(text=text, language=language, duration_seconds=duration_seconds)
+
+        # Retry via REST while wav_path (the normalized 16kHz mono PCM WAV,
+        # same file the SDK just used) still exists on disk -- cleanup()
+        # below deletes it, and the original audio_path isn't necessarily a
+        # WAV at all (e.g. an mp3/m4a/webm upload), which would make
+        # _wav_format_content_type() silently mislabel raw non-WAV bytes as
+        # WAV/PCM instead of declaring their real format.
+        logger.info(
+            "azure_speech: SDK path recognized no text -- retrying via Azure's REST endpoint "
+            "directly, declaring the real audio format explicitly (this is what a direct Postman "
+            "call against Azure does, bypassing the SDK's local AudioConfig(filename=...) WAV parsing)"
+        )
+        rest_text = _transcribe_via_rest(wav_path, language=language, key=key, region=region)
+        if rest_text:
+            logger.info("azure_speech: REST retry succeeded where the SDK path did not")
+            rest_duration = _wav_file_duration_seconds(wav_path) or duration_seconds
+            return AzureTranscriptionResult(text=rest_text, language=language, duration_seconds=rest_duration)
+
+        return AzureTranscriptionResult(text="", language=language)
     finally:
         if cleanup:
             cleanup()
-
-    if text:
-        return AzureTranscriptionResult(text=text, language=language, duration_seconds=duration_seconds)
-
-    logger.info(
-        "azure_speech: SDK path recognized no text -- retrying via Azure's REST endpoint "
-        "directly, declaring the real audio format explicitly (this is what a direct Postman "
-        "call against Azure does, bypassing the SDK's local AudioConfig(filename=...) WAV parsing)"
-    )
-    rest_text = _transcribe_via_rest(audio_path, language=language, key=key, region=region)
-    if rest_text:
-        logger.info("azure_speech: REST retry succeeded where the SDK path did not")
-        rest_duration = _wav_file_duration_seconds(audio_path) or duration_seconds
-        return AzureTranscriptionResult(text=rest_text, language=language, duration_seconds=rest_duration)
-
-    return AzureTranscriptionResult(text="", language=language)
 
 
 def _wav_format_content_type(audio_path: Path) -> str | None:
@@ -472,15 +478,27 @@ def _synthesize_via_sdk(text: str, *, voice: str, key: str, region: str) -> byte
     raise AzureSpeechUnavailable(f"Azure Speech synthesis failed: reason={result.reason}")
 
 
+def _voice_locale(voice: str) -> str:
+    """Derives the xml:lang locale (e.g. "en-IN") from an Azure voice name
+    (e.g. "en-IN-NeerjaNeural") -- config.yaml offers en-GB/en-IN voices
+    alongside en-US ones, so this can't be hardcoded to "en-US".
+    """
+    parts = voice.split("-")
+    if len(parts) >= 2:
+        return f"{parts[0]}-{parts[1]}"
+    return "en-US"
+
+
 def _synthesize_via_rest(text: str, *, voice: str, key: str, region: str) -> bytes:
     """Azure Neural TTS via the REST endpoint -- plain HTTPS POST, no
     WebSocket, so it benefits from the truststore fix the same way the
     speech-to-text REST fallback does.
     """
     url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
+    locale = _voice_locale(voice)
     ssml = (
-        "<speak version='1.0' xml:lang='en-US'>"
-        f"<voice xml:lang='en-US' name='{saxutils.escape(voice)}'>"
+        f"<speak version='1.0' xml:lang='{locale}'>"
+        f"<voice xml:lang='{locale}' name='{saxutils.escape(voice)}'>"
         f"{saxutils.escape(text)}"
         "</voice></speak>"
     )

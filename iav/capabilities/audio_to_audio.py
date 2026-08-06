@@ -235,7 +235,9 @@ class AudioToAudio(Capability):
         # while the questions are written in another. Only translates again
         # when questions are actually being generated.
         question_source = script
-        if (
+        if question_language == "Same as input":
+            question_source = original_script
+        elif (
             want_questions
             and question_language
             and question_language != "Same as narration"

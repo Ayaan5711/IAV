@@ -1,10 +1,11 @@
 """Text generation with a choice of engine: Azure OpenAI, Gemini, or both.
 
 Used by every capability step that is pure text-in/text-out -- narration
-scripts, transcript cleanup, passage/question writing. Capabilities that need
-Gemini's multimodal understanding (video, image) don't go through this; Azure
-OpenAI's chat-completions deployment never sees that input, so those calls
-stay directly on GeminiClient.
+scripts, transcript cleanup, passage/question writing. Steps that need
+image understanding (generating questions from a picture) go through
+iav/models/image_generation.py's understand_image() instead, which supports
+the same engine choice via Azure's vision-capable chat completions. Video
+understanding has no Azure path yet and stays directly on GeminiClient.
 
 Three engine modes, chosen per call (typically from a UI dropdown):
   auto:   Azure OpenAI first if configured, Gemini as an automatic fallback.
