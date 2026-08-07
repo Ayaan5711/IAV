@@ -105,16 +105,40 @@ def is_configured() -> bool:
 
 def _apply_proxy(speech_config: "speechsdk.SpeechConfig") -> None:
     """Points the SDK's native transport at the corporate proxy, if one is
-    configured via the standard HTTPS_PROXY/HTTP_PROXY env vars.
+    configured.
 
     Unlike `requests` (used by the REST paths below), the Speech SDK's own
-    WebSocket connection does NOT read these env vars automatically -- it
-    only uses a proxy if told to explicitly via set_proxy(). Behind a
-    network that requires all outbound traffic to go through the proxy,
-    skipping this makes the SDK try a direct connection and fail with
-    WS_OPEN_ERROR_UNDERLYING_IO_OPEN_FAILED, even though the exact same
-    proxy already works fine for this app's REST calls.
+    WebSocket connection does NOT pick up a proxy automatically -- it only
+    uses one if told to explicitly via set_proxy(). Behind a network that
+    requires all outbound traffic through the proxy, skipping this makes
+    the SDK try a direct connection and fail with
+    WS_OPEN_ERROR_UNDERLYING_IO_OPEN_FAILED, even when the same proxy
+    already works fine for this app's REST calls.
+
+    Checks AZURE_SPEECH_PROXY_HOST / AZURE_SPEECH_PROXY_PORT (+ optional
+    _USERNAME / _PASSWORD) first -- explicit, app-specific settings that go
+    in .env alongside AZURE_SPEECH_KEY/AZURE_SPEECH_REGION, not guessed
+    from ambient system state. Falls back to parsing the standard
+    HTTPS_PROXY/HTTP_PROXY env vars if those aren't set, for setups where
+    the OS/shell already exports one.
     """
+    host = os.environ.get("AZURE_SPEECH_PROXY_HOST")
+    port_raw = os.environ.get("AZURE_SPEECH_PROXY_PORT")
+    if host and port_raw:
+        try:
+            port = int(port_raw)
+        except ValueError:
+            logger.warning(
+                "azure_speech: AZURE_SPEECH_PROXY_PORT=%r is not a valid integer -- SDK proxy not configured",
+                port_raw,
+            )
+            return
+        username = os.environ.get("AZURE_SPEECH_PROXY_USERNAME") or None
+        password = os.environ.get("AZURE_SPEECH_PROXY_PASSWORD") or None
+        speech_config.set_proxy(host, port, username, password)
+        logger.info("azure_speech: configured SDK to use proxy %s:%d (from AZURE_SPEECH_PROXY_HOST/PORT)", host, port)
+        return
+
     proxy_url = (
         os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
         or os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
@@ -130,7 +154,7 @@ def _apply_proxy(speech_config: "speechsdk.SpeechConfig") -> None:
         )
         return
     speech_config.set_proxy(parsed.hostname, parsed.port, parsed.username, parsed.password)
-    logger.info("azure_speech: configured SDK to use proxy %s:%d", parsed.hostname, parsed.port)
+    logger.info("azure_speech: configured SDK to use proxy %s:%d (from HTTPS_PROXY/HTTP_PROXY)", parsed.hostname, parsed.port)
 
 
 def transcribe_file(audio_path: Path, *, language: str = "en-US") -> AzureTranscriptionResult:
