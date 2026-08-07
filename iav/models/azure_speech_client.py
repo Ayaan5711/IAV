@@ -25,6 +25,7 @@ import xml.sax.saxutils as saxutils
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlparse
 
 import requests
 
@@ -102,6 +103,36 @@ def is_configured() -> bool:
     return True
 
 
+def _apply_proxy(speech_config: "speechsdk.SpeechConfig") -> None:
+    """Points the SDK's native transport at the corporate proxy, if one is
+    configured via the standard HTTPS_PROXY/HTTP_PROXY env vars.
+
+    Unlike `requests` (used by the REST paths below), the Speech SDK's own
+    WebSocket connection does NOT read these env vars automatically -- it
+    only uses a proxy if told to explicitly via set_proxy(). Behind a
+    network that requires all outbound traffic to go through the proxy,
+    skipping this makes the SDK try a direct connection and fail with
+    WS_OPEN_ERROR_UNDERLYING_IO_OPEN_FAILED, even though the exact same
+    proxy already works fine for this app's REST calls.
+    """
+    proxy_url = (
+        os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+        or os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
+    )
+    if not proxy_url:
+        return
+    parsed = urlparse(proxy_url)
+    if not parsed.hostname or not parsed.port:
+        logger.warning(
+            "azure_speech: HTTPS_PROXY/HTTP_PROXY is set (%s) but couldn't be parsed as "
+            "host:port -- SDK proxy not configured",
+            proxy_url,
+        )
+        return
+    speech_config.set_proxy(parsed.hostname, parsed.port, parsed.username, parsed.password)
+    logger.info("azure_speech: configured SDK to use proxy %s:%d", parsed.hostname, parsed.port)
+
+
 def transcribe_file(audio_path: Path, *, language: str = "en-US") -> AzureTranscriptionResult:
     """Continuous recognition over an audio file, returns the full transcript.
 
@@ -120,6 +151,7 @@ def transcribe_file(audio_path: Path, *, language: str = "en-US") -> AzureTransc
     try:
         speech_config = speechsdk.SpeechConfig(subscription=key, region=region)
         speech_config.speech_recognition_language = language
+        _apply_proxy(speech_config)
         audio_config = speechsdk.audio.AudioConfig(filename=str(wav_path))
         recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
 
@@ -424,11 +456,14 @@ def synthesize_speech(text: str, *, voice: str) -> bytes:
 
     Tries the SDK first, then falls back to the REST endpoint. The SDK's
     WebSocket transport does its own TLS/network handling independent of
-    Python's `ssl` module, so the truststore fix above (which only helps
-    `requests`-based calls) doesn't reach it -- behind a proxy that blocks
-    or mishandles WebSocket upgrades while plain HTTPS still works, the SDK
-    path fails with a connection error even though the REST path succeeds.
-    Same shape as _transcribe_via_rest()'s relationship to the SDK ASR path.
+    Python's `ssl` module and doesn't read HTTPS_PROXY/HTTP_PROXY on its
+    own (see _apply_proxy()) -- behind a network that requires all
+    outbound traffic through a proxy, an unconfigured SDK path fails with
+    a connection error even once that proxy is set as an env var and the
+    REST path (which `requests` picks it up for automatically) succeeds.
+    The REST fallback here stays as a backstop for whatever _apply_proxy()
+    doesn't cover. Same shape as _transcribe_via_rest()'s relationship to
+    the SDK ASR path.
     """
     if not _SDK_AVAILABLE:
         raise AzureSpeechUnavailable("azure-cognitiveservices-speech is not installed.")
@@ -455,6 +490,7 @@ def synthesize_speech(text: str, *, voice: str) -> bytes:
 def _synthesize_via_sdk(text: str, *, voice: str, key: str, region: str) -> bytes:
     speech_config = speechsdk.SpeechConfig(subscription=key, region=region)
     speech_config.speech_synthesis_voice_name = voice
+    _apply_proxy(speech_config)
     speech_config.set_speech_synthesis_output_format(
         speechsdk.SpeechSynthesisOutputFormat.Riff24Khz16BitMonoPcm
     )
