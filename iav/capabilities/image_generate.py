@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import string
 
 from iav.capabilities._json_utils import JsonParseError, parse_json_loose
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
@@ -60,6 +61,27 @@ def _format_placeholder_scheme_for_questions(labels: list[dict]) -> str:
         for item in labels
         if item.get("kind") == "placeholder"
     )
+
+
+def _assign_label_ids(labels: object) -> None:
+    """Assigns short, sequential ids (A, B, C, ...) to each label in place,
+    instead of asking the model to invent them.
+
+    Left to invent its own "short unique id", the label-design model has
+    been observed either reusing the same tag for every entry (especially
+    when the description hints at a specific labelling style like "a, b,
+    c") or hallucinating nonsense strings ("ssc", "bshbdh") once asked to
+    keep them short. Assigning ids ourselves, in the order the model listed
+    the entries, makes both failure modes structurally impossible rather
+    than something a prompt has to talk the model out of.
+    """
+    if not isinstance(labels, list):
+        return
+    letters = string.ascii_uppercase
+    for i, item in enumerate(labels):
+        if not isinstance(item, dict):
+            continue
+        item["id"] = letters[i] if i < len(letters) else letters[i // len(letters) - 1] + letters[i % len(letters)]
 
 
 def _validate_label_scheme(labels: object) -> list[str]:
@@ -146,6 +168,7 @@ class ImageGenerate(Capability):
         labels = design_parsed.get("labels") if isinstance(design_parsed, dict) else None
         if not isinstance(labels, list) or not labels:
             raise ImageGenerateError("Label design returned no usable labels.")
+        _assign_label_ids(labels)
         return labels, call_record
 
     def process(self, payload: CapabilityInput) -> CapabilityOutput:

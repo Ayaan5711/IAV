@@ -628,20 +628,22 @@ capabilities:
       """
 
       Rules:
-      - Every id must be short and unique -- never reuse the same id twice.
       - Choose a sensible number of placeholders for this description; don't
         over- or under-label it.
       - "given" entries must include the exact value/name to render on the
         diagram.
       - "placeholder" entries must include the underlying concept (for our
         internal answer key only) -- that concept text must never be
-        rendered in the image itself, only the bare id.
+        rendered in the image itself.
+      - List entries in the order they should be labelled. Do not invent an
+        id/tag yourself -- short tags (A, B, C, ...) are assigned
+        automatically afterward, in the order you list them here.
 
       Return ONLY a JSON object matching this schema:
       {{
         "labels": [
-          {{"id": "<short unique tag>", "kind": "given", "value": "<text to render>"}},
-          {{"id": "<short unique tag>", "kind": "placeholder", "concept": "<what it represents -- internal use only>"}}
+          {{"kind": "given", "value": "<text to render>"}},
+          {{"kind": "placeholder", "concept": "<what it represents -- internal use only>"}}
         ]
       }}
     label_render_instruction: |
