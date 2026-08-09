@@ -146,6 +146,33 @@ def _validate_label_scheme(labels: object) -> list[str]:
     return errors
 
 
+def _count_shortfall_note(labels: list[dict], target_count: int) -> str | None:
+    """Soft check: did the design step actually try to hit the requested
+    question count, or take the easy way out?
+
+    Unlike _validate_label_scheme's checks (which gate a hard failure if
+    still broken after a retry), this is intentionally not fed into that
+    hard-fail path -- some subjects genuinely can't support the requested
+    count (e.g. "a battery and a bulb" can't yield 10 distinct parts), and
+    forcing a hard failure there would be worse than just accepting fewer
+    placeholders. It exists purely to trigger one retry with sharper
+    wording when the shortfall looks like the model just didn't try hard
+    enough, which is common on rich subjects (anatomy, machines, systems)
+    that can easily support far more distinct parts than a first pass finds.
+    """
+    placeholder_count = sum(1 for item in labels if isinstance(item, dict) and item.get("kind") == "placeholder")
+    if placeholder_count >= target_count:
+        return None
+    return (
+        f"Only {placeholder_count} placeholder labels were designed, but the target was "
+        f"{target_count}. Most diagrams have more distinct labelable parts than an initial "
+        f"pass finds -- look again for genuinely distinct sub-components, connections, or "
+        f"regions and design closer to {target_count}, unless this specific subject truly "
+        f"cannot support that many (if so, that's fine -- just don't stop at the first few "
+        f"obvious parts when more real ones exist)."
+    )
+
+
 class ImageGenerate(Capability):
     name = "image_generate"
 
@@ -244,11 +271,12 @@ class ImageGenerate(Capability):
             target_count_line = ""
             if want_questions:
                 target_count_line = (
-                    f"- One comprehension question is generated per placeholder, so aim for "
-                    f"about {count} placeholders total -- adjust down if the diagram genuinely "
-                    f"doesn't have that many distinct labelable parts rather than forcing "
-                    f"artificial ones, and don't let this override the audience/difficulty "
-                    f"guidance below.\n"
+                    f"- Design {count} placeholder labels -- one comprehension question is "
+                    f"generated per placeholder. Most diagrams have more distinct labelable "
+                    f"parts than a first pass finds (sub-components, connections, regions), "
+                    f"so treat {count} as achievable unless the subject is genuinely minimal "
+                    f"(e.g. a single simple object with only 2-3 real parts) -- don't stop at "
+                    f"just the most obvious parts when more real ones exist.\n"
                 )
             design_prompt = self._settings["label_design_instruction"].format(
                 free_text=free_text, common_block=common_block(common), target_count_line=target_count_line
@@ -260,14 +288,18 @@ class ImageGenerate(Capability):
             calls.append(design_call)
 
             label_errors = _validate_label_scheme(labels)
-            if label_errors:
+            count_note = _count_shortfall_note(labels, count) if want_questions else None
+            if label_errors or count_note:
+                feedback = list(label_errors)
+                if count_note:
+                    feedback.append(count_note)
                 logger.warning(
                     "image_generate: label design had %d issue(s), retrying once: %s",
-                    len(label_errors), "; ".join(label_errors),
+                    len(feedback), "; ".join(feedback),
                 )
                 retry_prompt = design_prompt + (
                     "\n\nYour previous attempt had these problems -- fix them exactly:\n"
-                    + "\n".join(f"- {e}" for e in label_errors)
+                    + "\n".join(f"- {e}" for e in feedback)
                 )
                 labels, retry_call = self._run_label_design(
                     retry_prompt, question_model, azure_deployment=azure_deployment, engine=engine
@@ -279,6 +311,10 @@ class ImageGenerate(Capability):
                     raise ImageGenerateError(
                         "Label design still has problems after a retry: " + "; ".join(label_errors)
                     )
+                # A count shortfall after the retry is accepted rather than
+                # hard-failing -- some subjects genuinely can't support the
+                # requested count; the retry was a genuine second attempt at
+                # it, not a guarantee.
 
             prompt = prompt + "\n\n" + self._settings["label_render_instruction"].format(
                 label_summary=_format_label_scheme_for_render(labels)
