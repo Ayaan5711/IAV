@@ -95,16 +95,24 @@ pricing:
 
     # Azure OpenAI pricing varies by region/commitment tier and isn't
     # confirmed against your actual Azure agreement -- these are public
-    # list-price estimates for gpt-4o-mini. Update to match whatever model
-    # your deployment (azure_openai.default_deployment below) actually runs,
-    # and check your Azure portal's pricing page before trusting this for
-    # budget decisions. This key MUST match azure_openai.default_deployment
-    # exactly, since that deployment name is what gets billed against it.
+    # list-price estimates. Each key below MUST match
+    # azure_openai.default_deployment exactly, since that deployment name
+    # is what gets billed against it and what every call_record's "model"
+    # field is set to -- add a new entry here (named after your deployment)
+    # if you switch to a model not already listed, or cost tracking silently
+    # reports $0 for it. Check your Azure portal's pricing page before
+    # trusting these for budget decisions.
     gpt-4o-mini:
       verified: false
       unit: per_million_tokens
       input_text: 0.15
       output_text: 0.60
+
+    gpt-4.1:
+      verified: false
+      unit: per_million_tokens
+      input_text: 2.00
+      output_text: 8.00
 
     # Azure OpenAI's Images API bills a flat rate per image (varies by
     # size/quality tier), not per token -- no usage_metadata comes back from
