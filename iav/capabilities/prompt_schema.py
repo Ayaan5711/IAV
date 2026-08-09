@@ -92,3 +92,35 @@ def common_block(common: CommonAttributes) -> str:
     lines.append(f"Target audience: {common.target_audience}")
     lines.append(f"Question type: {common.question_type}")
     return "\n".join(lines)
+
+
+def assessment_outcome_line(common: CommonAttributes) -> str:
+    """A single optional line surfacing just the assessment outcome
+    (learning objective), for a prompt that already has its own, more
+    specific level/question-type parameters and shouldn't also receive
+    common.target_audience/difficulty_level/question_type as a second,
+    potentially-conflicting source for the same thing (e.g. a question-
+    generation step that takes its own `level` and `question_type` args,
+    separate from the ones on CommonAttributes). Returns "" when no
+    outcome was set, so callers can drop it inline without a stray blank
+    section.
+    """
+    if not common.assessment_outcome.strip():
+        return ""
+    return f"Assessment outcome -- tie every question back to this where possible: {common.assessment_outcome}\n\n"
+
+
+def language_instruction_suffix(language: str | None) -> str:
+    """Appended to a questions-generation prompt when a specific output
+    language is requested -- keeps schema/control fields (id, type,
+    difficulty) in English while translating the human-readable text
+    fields. Shared by every capability that generates the same question
+    JSON schema (image_generate, image_enhance, audio_to_audio,
+    audio_question_generation).
+    """
+    if not language or language in ("Same as input", "Same as narration"):
+        return ""
+    return (
+        f'\n\nWrite the "stem", "options", "answer", and "explanation" fields in {language}. '
+        'Keep "id", "type", and "difficulty" exactly as specified in the schema -- do not translate those.'
+    )

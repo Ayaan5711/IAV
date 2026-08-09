@@ -21,9 +21,11 @@ import subprocess
 import tempfile
 import threading
 import wave
+import xml.sax.saxutils as saxutils
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlparse
 
 import requests
 
@@ -69,6 +71,21 @@ class AzureSpeechUnavailable(RuntimeError):
 class AzureTranscriptionResult:
     text: str
     language: str
+    # Azure Speech bills per hour of audio processed, not per token -- best
+    # effort from the actual WAV sent to Azure; None when it couldn't be
+    # measured (cost tracking degrades gracefully in that case).
+    duration_seconds: float | None = None
+
+
+def _wav_file_duration_seconds(path: Path) -> float | None:
+    try:
+        with wave.open(str(path), "rb") as wav:
+            frames = wav.getnframes()
+            rate = wav.getframerate()
+            return frames / rate if rate else None
+    except (wave.Error, EOFError, OSError) as exc:
+        logger.warning("azure_speech: could not read duration from %s: %s", path.name, exc)
+        return None
 
 
 def is_configured() -> bool:
@@ -84,6 +101,60 @@ def is_configured() -> bool:
         )
         return False
     return True
+
+
+def _apply_proxy(speech_config: "speechsdk.SpeechConfig") -> None:
+    """Points the SDK's native transport at the corporate proxy, if one is
+    configured.
+
+    Unlike `requests` (used by the REST paths below), the Speech SDK's own
+    WebSocket connection does NOT pick up a proxy automatically -- it only
+    uses one if told to explicitly via set_proxy(). Behind a network that
+    requires all outbound traffic through the proxy, skipping this makes
+    the SDK try a direct connection and fail with
+    WS_OPEN_ERROR_UNDERLYING_IO_OPEN_FAILED, even when the same proxy
+    already works fine for this app's REST calls.
+
+    Checks AZURE_SPEECH_PROXY_HOST / AZURE_SPEECH_PROXY_PORT (+ optional
+    _USERNAME / _PASSWORD) first -- explicit, app-specific settings that go
+    in .env alongside AZURE_SPEECH_KEY/AZURE_SPEECH_REGION, not guessed
+    from ambient system state. Falls back to parsing the standard
+    HTTPS_PROXY/HTTP_PROXY env vars if those aren't set, for setups where
+    the OS/shell already exports one.
+    """
+    host = os.environ.get("AZURE_SPEECH_PROXY_HOST")
+    port_raw = os.environ.get("AZURE_SPEECH_PROXY_PORT")
+    if host and port_raw:
+        try:
+            port = int(port_raw)
+        except ValueError:
+            logger.warning(
+                "azure_speech: AZURE_SPEECH_PROXY_PORT=%r is not a valid integer -- SDK proxy not configured",
+                port_raw,
+            )
+            return
+        username = os.environ.get("AZURE_SPEECH_PROXY_USERNAME") or None
+        password = os.environ.get("AZURE_SPEECH_PROXY_PASSWORD") or None
+        speech_config.set_proxy(host, port, username, password)
+        logger.info("azure_speech: configured SDK to use proxy %s:%d (from AZURE_SPEECH_PROXY_HOST/PORT)", host, port)
+        return
+
+    proxy_url = (
+        os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+        or os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
+    )
+    if not proxy_url:
+        return
+    parsed = urlparse(proxy_url)
+    if not parsed.hostname or not parsed.port:
+        logger.warning(
+            "azure_speech: HTTPS_PROXY/HTTP_PROXY is set (%s) but couldn't be parsed as "
+            "host:port -- SDK proxy not configured",
+            proxy_url,
+        )
+        return
+    speech_config.set_proxy(parsed.hostname, parsed.port, parsed.username, parsed.password)
+    logger.info("azure_speech: configured SDK to use proxy %s:%d (from HTTPS_PROXY/HTTP_PROXY)", parsed.hostname, parsed.port)
 
 
 def transcribe_file(audio_path: Path, *, language: str = "en-US") -> AzureTranscriptionResult:
@@ -104,6 +175,7 @@ def transcribe_file(audio_path: Path, *, language: str = "en-US") -> AzureTransc
     try:
         speech_config = speechsdk.SpeechConfig(subscription=key, region=region)
         speech_config.speech_recognition_language = language
+        _apply_proxy(speech_config)
         audio_config = speechsdk.audio.AudioConfig(filename=str(wav_path))
         recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
 
@@ -154,24 +226,32 @@ def transcribe_file(audio_path: Path, *, language: str = "en-US") -> AzureTransc
 
         text = " ".join(segments).strip()
         logger.info("azure_speech: recognized %d segment(s), %d chars", len(segments), len(text))
+        duration_seconds = _wav_file_duration_seconds(wav_path)
+
+        if text:
+            return AzureTranscriptionResult(text=text, language=language, duration_seconds=duration_seconds)
+
+        # Retry via REST while wav_path (the normalized 16kHz mono PCM WAV,
+        # same file the SDK just used) still exists on disk -- cleanup()
+        # below deletes it, and the original audio_path isn't necessarily a
+        # WAV at all (e.g. an mp3/m4a/webm upload), which would make
+        # _wav_format_content_type() silently mislabel raw non-WAV bytes as
+        # WAV/PCM instead of declaring their real format.
+        logger.info(
+            "azure_speech: SDK path recognized no text -- retrying via Azure's REST endpoint "
+            "directly, declaring the real audio format explicitly (this is what a direct Postman "
+            "call against Azure does, bypassing the SDK's local AudioConfig(filename=...) WAV parsing)"
+        )
+        rest_text = _transcribe_via_rest(wav_path, language=language, key=key, region=region)
+        if rest_text:
+            logger.info("azure_speech: REST retry succeeded where the SDK path did not")
+            rest_duration = _wav_file_duration_seconds(wav_path) or duration_seconds
+            return AzureTranscriptionResult(text=rest_text, language=language, duration_seconds=rest_duration)
+
+        return AzureTranscriptionResult(text="", language=language)
     finally:
         if cleanup:
             cleanup()
-
-    if text:
-        return AzureTranscriptionResult(text=text, language=language)
-
-    logger.info(
-        "azure_speech: SDK path recognized no text -- retrying via Azure's REST endpoint "
-        "directly, declaring the real audio format explicitly (this is what a direct Postman "
-        "call against Azure does, bypassing the SDK's local AudioConfig(filename=...) WAV parsing)"
-    )
-    rest_text = _transcribe_via_rest(audio_path, language=language, key=key, region=region)
-    if rest_text:
-        logger.info("azure_speech: REST retry succeeded where the SDK path did not")
-        return AzureTranscriptionResult(text=rest_text, language=language)
-
-    return AzureTranscriptionResult(text="", language=language)
 
 
 def _wav_format_content_type(audio_path: Path) -> str | None:
@@ -397,6 +477,17 @@ def synthesize_speech(text: str, *, voice: str) -> bytes:
     Single-voice only -- Azure Neural TTS here doesn't do the multi-speaker
     dialogue Gemini's TTS supports; callers should route multi-speaker
     requests to Gemini regardless of the selected engine.
+
+    Tries the SDK first, then falls back to the REST endpoint. The SDK's
+    WebSocket transport does its own TLS/network handling independent of
+    Python's `ssl` module and doesn't read HTTPS_PROXY/HTTP_PROXY on its
+    own (see _apply_proxy()) -- behind a network that requires all
+    outbound traffic through a proxy, an unconfigured SDK path fails with
+    a connection error even once that proxy is set as an env var and the
+    REST path (which `requests` picks it up for automatically) succeeds.
+    The REST fallback here stays as a backstop for whatever _apply_proxy()
+    doesn't cover. Same shape as _transcribe_via_rest()'s relationship to
+    the SDK ASR path.
     """
     if not _SDK_AVAILABLE:
         raise AzureSpeechUnavailable("azure-cognitiveservices-speech is not installed.")
@@ -406,8 +497,24 @@ def synthesize_speech(text: str, *, voice: str) -> bytes:
     if not key or not region:
         raise AzureSpeechUnavailable("AZURE_SPEECH_KEY / AZURE_SPEECH_REGION are not set.")
 
+    try:
+        return _synthesize_via_sdk(text, voice=voice, key=key, region=region)
+    except AzureSpeechUnavailable as sdk_exc:
+        logger.warning(
+            "azure_speech: SDK-based synthesis failed, retrying via REST endpoint: %s", sdk_exc
+        )
+        try:
+            return _synthesize_via_rest(text, voice=voice, key=key, region=region)
+        except AzureSpeechUnavailable as rest_exc:
+            raise AzureSpeechUnavailable(
+                f"Both the SDK and REST synthesis paths failed. SDK: {sdk_exc} | REST: {rest_exc}"
+            ) from rest_exc
+
+
+def _synthesize_via_sdk(text: str, *, voice: str, key: str, region: str) -> bytes:
     speech_config = speechsdk.SpeechConfig(subscription=key, region=region)
     speech_config.speech_synthesis_voice_name = voice
+    _apply_proxy(speech_config)
     speech_config.set_speech_synthesis_output_format(
         speechsdk.SpeechSynthesisOutputFormat.Riff24Khz16BitMonoPcm
     )
@@ -415,12 +522,12 @@ def synthesize_speech(text: str, *, voice: str) -> bytes:
     # to a speaker or writing it to a file, since this runs headless.
     synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=None)
 
-    logger.info("azure_speech: synthesizing speech (voice=%s, chars=%d)", voice, len(text))
+    logger.info("azure_speech: synthesizing speech via SDK (voice=%s, chars=%d)", voice, len(text))
     result = synthesizer.speak_text_async(text).get()
 
     if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
         audio_bytes = result.audio_data
-        logger.info("azure_speech: synthesis completed (%d bytes)", len(audio_bytes))
+        logger.info("azure_speech: SDK synthesis completed (%d bytes)", len(audio_bytes))
         return audio_bytes
 
     if result.reason == speechsdk.ResultReason.Canceled:
@@ -429,3 +536,48 @@ def synthesize_speech(text: str, *, voice: str) -> bytes:
             f"Azure Speech synthesis canceled: {details.reason} -- {details.error_details}"
         )
     raise AzureSpeechUnavailable(f"Azure Speech synthesis failed: reason={result.reason}")
+
+
+def _voice_locale(voice: str) -> str:
+    """Derives the xml:lang locale (e.g. "en-IN") from an Azure voice name
+    (e.g. "en-IN-NeerjaNeural") -- config.yaml offers en-GB/en-IN voices
+    alongside en-US ones, so this can't be hardcoded to "en-US".
+    """
+    parts = voice.split("-")
+    if len(parts) >= 2:
+        return f"{parts[0]}-{parts[1]}"
+    return "en-US"
+
+
+def _synthesize_via_rest(text: str, *, voice: str, key: str, region: str) -> bytes:
+    """Azure Neural TTS via the REST endpoint -- plain HTTPS POST, no
+    WebSocket, so it benefits from the truststore fix the same way the
+    speech-to-text REST fallback does.
+    """
+    url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
+    locale = _voice_locale(voice)
+    ssml = (
+        f"<speak version='1.0' xml:lang='{locale}'>"
+        f"<voice xml:lang='{locale}' name='{saxutils.escape(voice)}'>"
+        f"{saxutils.escape(text)}"
+        "</voice></speak>"
+    )
+    headers = {
+        "Ocp-Apim-Subscription-Key": key,
+        "Content-Type": "application/ssml+xml",
+        "X-Microsoft-OutputFormat": "riff-24khz-16bit-mono-pcm",
+        "User-Agent": "iav-azure-speech-rest",
+    }
+    logger.info("azure_speech: synthesizing speech via REST (voice=%s, chars=%d)", voice, len(text))
+    try:
+        resp = requests.post(url, headers=headers, data=ssml.encode("utf-8"), timeout=REST_TIMEOUT_SECONDS)
+    except requests.RequestException as exc:
+        raise AzureSpeechUnavailable(f"REST TTS call failed: {exc}") from exc
+
+    if resp.status_code != 200:
+        raise AzureSpeechUnavailable(f"REST TTS returned HTTP {resp.status_code}: {resp.text[:300]}")
+    if not resp.content:
+        raise AzureSpeechUnavailable("REST TTS returned an empty response body.")
+
+    logger.info("azure_speech: REST synthesis completed (%d bytes)", len(resp.content))
+    return resp.content

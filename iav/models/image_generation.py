@@ -23,6 +23,7 @@ from typing import Any
 
 from iav.models import azure_openai_client
 from iav.models.gemini_client import GeminiCallError, GeminiClient
+from iav.models.pricing import UsageInfo
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +205,108 @@ def edit_image(
         return _call_gemini_edit(
             gemini_client, model=gemini_model, image_bytes=image_bytes, image_mime_type=image_mime_type,
             instruction=instruction, resolution=resolution, output_mime_type=output_mime_type, label=fallback_label,
+        )
+    except GeminiCallError as exc:
+        raise ImageGenerationError(f"Gemini call failed for '{label}': {exc}") from exc
+
+
+@dataclass
+class TextFromImageResult:
+    text: str
+    engine: str  # "azure-openai" | "gemini"
+    call_record: dict[str, Any]
+
+
+def _call_gemini_understand(
+    gemini_client: GeminiClient, *, model: str, image_bytes: bytes, image_mime_type: str,
+    instruction: str, response_mime_type: str | None, label: str,
+) -> TextFromImageResult:
+    result = gemini_client.understand_image(
+        model=model, image_bytes=image_bytes, image_mime_type=image_mime_type,
+        instruction=instruction, response_mime_type=response_mime_type,
+    )
+    text = (result.text or "").strip()
+    if not text:
+        raise GeminiCallError("no text returned")
+    return TextFromImageResult(
+        text=text, engine="gemini",
+        call_record={"label": label, "model": model, "usage": result.usage},
+    )
+
+
+def _call_azure_understand(
+    *, deployment: str, image_bytes: bytes, image_mime_type: str, instruction: str,
+    response_mime_type: str | None, label: str,
+) -> TextFromImageResult:
+    azure_result = azure_openai_client.understand_image(
+        instruction, deployment=deployment, image_bytes=image_bytes, image_mime_type=image_mime_type,
+        response_mime_type=response_mime_type,
+    )
+    usage = UsageInfo(
+        prompt_tokens=azure_result.prompt_tokens,
+        output_tokens=azure_result.completion_tokens,
+        total_tokens=azure_result.total_tokens,
+    )
+    return TextFromImageResult(
+        text=azure_result.text, engine="azure-openai",
+        call_record={"label": label, "model": deployment, "usage": usage},
+    )
+
+
+def understand_image(
+    *,
+    gemini_client: GeminiClient,
+    gemini_model: str,
+    image_bytes: bytes,
+    image_mime_type: str,
+    instruction: str,
+    label: str,
+    response_mime_type: str | None = None,
+    azure_deployment: str | None = None,
+    engine: str = "auto",
+) -> TextFromImageResult:
+    """Text-out analysis of an image (e.g. generating questions about it) --
+    a Chat Completions capability, distinct from generate_image()/edit_image()
+    above (the Images API). azure_deployment here should be the text/chat
+    deployment (azure_openai.default_deployment), not the image deployment.
+    """
+    engine = (engine or "auto").lower()
+
+    if engine == "gemini":
+        try:
+            return _call_gemini_understand(
+                gemini_client, model=gemini_model, image_bytes=image_bytes, image_mime_type=image_mime_type,
+                instruction=instruction, response_mime_type=response_mime_type, label=label,
+            )
+        except GeminiCallError as exc:
+            raise ImageGenerationError(f"Gemini call failed for '{label}': {exc}") from exc
+
+    if engine == "azure":
+        if not azure_deployment:
+            raise ImageGenerationError(f"Azure OpenAI was selected for '{label}' but no text deployment is configured.")
+        try:
+            return _call_azure_understand(
+                deployment=azure_deployment, image_bytes=image_bytes, image_mime_type=image_mime_type,
+                instruction=instruction, response_mime_type=response_mime_type, label=label,
+            )
+        except azure_openai_client.AzureOpenAIUnavailable as exc:
+            raise ImageGenerationError(f"Azure OpenAI call failed for '{label}': {exc}") from exc
+
+    attempted_azure = bool(azure_deployment) and azure_openai_client.is_configured()
+    if attempted_azure:
+        try:
+            return _call_azure_understand(
+                deployment=azure_deployment, image_bytes=image_bytes, image_mime_type=image_mime_type,
+                instruction=instruction, response_mime_type=response_mime_type, label=label,
+            )
+        except azure_openai_client.AzureOpenAIUnavailable as exc:
+            logger.warning("Azure OpenAI image analysis failed for '%s', falling back to Gemini: %s", label, exc)
+
+    fallback_label = f"{label} (Gemini fallback)" if attempted_azure else label
+    try:
+        return _call_gemini_understand(
+            gemini_client, model=gemini_model, image_bytes=image_bytes, image_mime_type=image_mime_type,
+            instruction=instruction, response_mime_type=response_mime_type, label=fallback_label,
         )
     except GeminiCallError as exc:
         raise ImageGenerationError(f"Gemini call failed for '{label}': {exc}") from exc

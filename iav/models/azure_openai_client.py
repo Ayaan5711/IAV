@@ -133,6 +133,68 @@ def generate_text(prompt: str, *, deployment: str, response_mime_type: str | Non
     )
 
 
+def understand_image(
+    prompt: str, *, deployment: str, image_bytes: bytes, image_mime_type: str = "image/png",
+    response_mime_type: str | None = None,
+) -> AzureTextResult:
+    """Vision-capable chat completion -- text-out analysis of an image (e.g.
+    generating questions about it), via Azure OpenAI's Chat Completions API
+    with an image content part. Needs a vision-capable deployment (e.g.
+    gpt-4o/gpt-4.1) -- shares the same text deployment as generate_text(),
+    NOT the Images API deployment used by generate_image()/edit_image()
+    above, which is a separate Azure capability entirely.
+    """
+    if not _SDK_AVAILABLE:
+        raise AzureOpenAIUnavailable("The 'openai' package is not installed.")
+    if not is_configured():
+        raise AzureOpenAIUnavailable("AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_API_KEY are not set.")
+
+    client = _get_client()
+    data_url = f"data:{image_mime_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+    kwargs: dict = {}
+    if response_mime_type == "application/json":
+        kwargs["response_format"] = {"type": "json_object"}
+
+    logger.info("azure_openai: analysing image (deployment=%s, prompt_chars=%d)", deployment, len(prompt))
+    try:
+        response = client.chat.completions.create(
+            model=deployment,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            }],
+            **kwargs,
+        )
+    except Exception as exc:
+        logger.exception("azure_openai: image analysis failed (deployment=%s)", deployment)
+        raise AzureOpenAIUnavailable(str(exc)) from exc
+
+    choice = response.choices[0] if response.choices else None
+    text = (choice.message.content or "").strip() if choice and choice.message else ""
+    usage = response.usage
+
+    prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+    completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+    total_tokens = int(getattr(usage, "total_tokens", 0) or 0)
+    logger.info(
+        "azure_openai: image analysis usage prompt=%d completion=%d total=%d",
+        prompt_tokens, completion_tokens, total_tokens,
+    )
+
+    if not text:
+        raise AzureOpenAIUnavailable("Azure OpenAI returned no text for image analysis (empty choice or content filtered).")
+
+    return AzureTextResult(
+        text=text,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+    )
+
+
 def _decode_image_response(response: Any, *, label: str) -> tuple[bytes, str | None]:
     item = response.data[0] if getattr(response, "data", None) else None
     if item is None:

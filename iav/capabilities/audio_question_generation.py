@@ -22,6 +22,7 @@ from typing import Any
 
 from iav.capabilities._json_utils import JsonParseError, parse_json_loose, questions_as_markdown
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
+from iav.capabilities.prompt_schema import language_instruction_suffix
 from iav.models import audio_generation
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
@@ -75,6 +76,7 @@ class AudioQuestionGeneration(Capability):
         target_language = params.get("target_language") or self.config.languages.get(
             "default_output_language", "Same as input"
         )
+        question_language = params.get("question_language") or "Same as narration"
 
         calls: list[dict[str, Any]] = []
 
@@ -99,6 +101,8 @@ class AudioQuestionGeneration(Capability):
             if not passage:
                 raise AudioQuestionGenerationError("Model returned no passage text.")
 
+        original_passage = passage  # pre-translation, for an independent question-language pass below
+
         # 1b. Translate into a different output language, if requested --------
         if target_language and target_language != "Same as input":
             translate_template = self.config.languages.get("translate_instruction")
@@ -115,6 +119,28 @@ class AudioQuestionGeneration(Capability):
                 raise AudioQuestionGenerationError(f"Translation to {target_language} failed: {exc}") from exc
             calls.append(translated.call_record)
             passage = translated.text.strip() or passage
+
+        # 1c. Resolve the passage used for question generation -- independent
+        # of the narration language above, so the narrated audio can stay in
+        # one language while the questions are written in another.
+        question_source = passage
+        if question_language == "Same as input":
+            question_source = original_passage
+        elif question_language and question_language not in ("Same as narration",) and question_language != target_language:
+            translate_template = self.config.languages.get("translate_instruction")
+            if not translate_template:
+                raise AudioQuestionGenerationError("No translate_instruction configured under languages: in config.yaml.")
+            logger.info("audio_question_generation: translating passage into %s for questions only", question_language)
+            try:
+                q_translated = translate_text(
+                    gemini_client=self.client, gemini_model=text_model, text=original_passage,
+                    target_language=question_language, translate_instruction_template=translate_template,
+                    azure_deployment=azure_deployment, engine=engine, label="translate_questions",
+                )
+            except (GeminiCallError, TextGenerationError) as exc:
+                raise AudioQuestionGenerationError(f"Translation to {question_language} for questions failed: {exc}") from exc
+            calls.append(q_translated.call_record)
+            question_source = q_translated.text.strip() or question_source
 
         # 2. Narrate the passage ----------------------------------------------
         narration_prompt = self._settings["narration_instruction"].format(
@@ -162,8 +188,8 @@ class AudioQuestionGeneration(Capability):
 
         # 3. Generate questions from the passage -------------------------------
         q_prompt = self._settings["questions_instruction"].format(
-            count=count, question_type=qtype, level=level, passage=passage
-        )
+            count=count, question_type=qtype, level=level, passage=question_source
+        ) + language_instruction_suffix(question_language)
         logger.info("audio_question_generation: generating questions")
         try:
             q_result = generate_text(
@@ -210,6 +236,7 @@ class AudioQuestionGeneration(Capability):
                 "mode": mode,
                 "passage": passage,
                 "target_language": target_language,
+                "question_language": question_language,
                 "questions_json_path": str(json_path),
                 "text_model": text_model,
                 "tts_model": tts_model,

@@ -126,6 +126,15 @@ pricing:
       unit: per_million_chars
       rate_per_million_chars: 16.00
 
+    # Azure Speech (speech-to-text) bills per hour of audio processed, not
+    # per token -- another synthetic "model" key shared by every Azure
+    # Speech transcription call. Public "Standard" list-price estimate,
+    # unconfirmed against your Azure agreement.
+    azure-speech-stt:
+      verified: false
+      unit: per_hour_audio
+      rate_per_hour: 1.00
+
 # Single place for every language option in the app -- input (Azure Speech
 # ASR locale, used only for transcription accuracy) and output (the
 # language narration/content ends up in -- an instruction to the text
@@ -565,6 +574,10 @@ capabilities:
       Constraints:
       - No watermarks, signatures, or overlaid text unless explicitly requested.
       - Content must be factually accurate and age-appropriate for the target audience.
+      - Leave clear space around every label/tag so it doesn't overlap other
+        lines, shapes, or labels -- legibility matters more than density.
+      - Use plain, high-contrast text for any labels (dark text on a light
+        background or vice versa); avoid decorative or stylized fonts.
     # Optional comprehension questions generated from the resulting image
     # (off by default, toggled in the UI) -- a text-out call via Gemini's
     # multimodal understanding, not routable through Azure OpenAI.
@@ -576,6 +589,12 @@ capabilities:
     questions_instruction: |
       You are an experienced subject-matter expert generating exam-quality
       questions based strictly on the image provided.
+
+      {assessment_outcome_line}This image was generated for a {visual_type}
+      depicting: {free_text}
+      Use that only to correctly interpret what the image shows -- every
+      question must still be answerable from the image itself, not from
+      this description alone.
 
       Generate {count} {question_type} questions at the {level} level based
       on what the image depicts. Do not invent details not shown in it.
@@ -608,6 +627,8 @@ capabilities:
       You are designing the labelling scheme for an exam diagram, before it
       is drawn, based on the description below.
 
+      {common_block}
+
       Decide which parts of the diagram will show their real value/name
       directly ("given" labels) and which parts will be shown only as a bare
       identifier tag for the student to identify later ("placeholder"
@@ -619,20 +640,24 @@ capabilities:
       """
 
       Rules:
-      - Every id must be short and unique -- never reuse the same id twice.
-      - Choose a sensible number of placeholders for this description; don't
-        over- or under-label it.
+      - Choose a sensible number of placeholders for this description and
+        the target audience/difficulty above; don't over- or under-label it
+        (e.g. a school-level diagram should have fewer, more obvious
+        placeholders than a postgraduate one).
       - "given" entries must include the exact value/name to render on the
         diagram.
       - "placeholder" entries must include the underlying concept (for our
         internal answer key only) -- that concept text must never be
-        rendered in the image itself, only the bare id.
+        rendered in the image itself.
+      - List entries in the order they should be labelled. Do not invent an
+        id/tag yourself -- short tags (A, B, C, ...) are assigned
+        automatically afterward, in the order you list them here.
 
       Return ONLY a JSON object matching this schema:
       {{
         "labels": [
-          {{"id": "<short unique tag>", "kind": "given", "value": "<text to render>"}},
-          {{"id": "<short unique tag>", "kind": "placeholder", "concept": "<what it represents -- internal use only>"}}
+          {{"kind": "given", "value": "<text to render>"}},
+          {{"kind": "placeholder", "concept": "<what it represents -- internal use only>"}}
         ]
       }}
     label_render_instruction: |
@@ -646,6 +671,9 @@ capabilities:
         "X"), at the correct part of the diagram. Do not render, hint at, or
         spell out what a placeholder represents anywhere in the image.
       - Do not add any label, tag, or id that isn't listed above.
+      - Keep every id short, plain, and in a consistent font -- leave clear
+        space around it so it's legible and doesn't overlap the diagram or
+        other labels.
     placeholder_questions_instruction: |
       Based strictly on the placeholder-to-concept mapping below (the answer
       key for an exam diagram), write exactly one {question_type} question
@@ -653,7 +681,7 @@ capabilities:
       part represents. Reference the label id directly in the question
       (e.g. "What does X represent in the diagram?").
 
-      Placeholder mapping:
+      {assessment_outcome_line}Placeholder mapping:
       {placeholder_summary}
 
       Return ONLY a JSON object matching this schema:

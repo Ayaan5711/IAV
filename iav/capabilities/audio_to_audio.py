@@ -35,6 +35,7 @@ from typing import Any
 
 from iav.capabilities._json_utils import JsonParseError, parse_json_loose
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
+from iav.capabilities.prompt_schema import language_instruction_suffix
 from iav.models import audio_generation, azure_speech_client
 from iav.models.config import Config, load_config
 from iav.models.gemini_client import GeminiCallError, GeminiClient, get_client
@@ -71,6 +72,7 @@ class AudioToAudio(Capability):
         target_language = params.get("target_language") or self.config.languages.get(
             "default_output_language", "Same as input"
         )
+        question_language = params.get("question_language") or "Same as narration"
         want_questions = bool(params.get("generate_questions", False))
         count = int(params.get("count", self._settings.get("default_question_count", 5)))
         qtype = params.get("type") or self._settings.get("default_question_type", "mcq")
@@ -113,6 +115,10 @@ class AudioToAudio(Capability):
                         "switch the Transcription engine to Gemini, which auto-detects the "
                         "spoken language instead of requiring it upfront."
                     )
+                calls.append({
+                    "label": "transcribe (Azure Speech)", "model": "azure-speech-stt", "usage": None,
+                    "duration_seconds": azure_result.duration_seconds or 0.0,
+                })
             elif asr_choice == "auto" and azure_speech_client.is_configured():
                 logger.info("audio_to_audio: transcribing via Azure Speech (language=%s)", language)
                 try:
@@ -121,6 +127,10 @@ class AudioToAudio(Capability):
                     if candidate:
                         transcript = candidate
                         asr_engine = f"Azure Speech ({language})"
+                        calls.append({
+                            "label": "transcribe (Azure Speech)", "model": "azure-speech-stt", "usage": None,
+                            "duration_seconds": azure_result.duration_seconds or 0.0,
+                        })
                     else:
                         logger.warning(
                             "audio_to_audio: Azure Speech recognized no text (language=%s, likely a "
@@ -201,6 +211,8 @@ class AudioToAudio(Capability):
             if not script:
                 raise AudioToAudioError("Model returned no content.")
 
+        original_script = script  # pre-translation, for an independent question-language pass below
+
         # Translate into a different output language, if requested ------------
         if target_language and target_language != "Same as input":
             translate_template = self.config.languages.get("translate_instruction")
@@ -217,6 +229,34 @@ class AudioToAudio(Capability):
                 raise AudioToAudioError(f"Translation to {target_language} failed: {exc}") from exc
             calls.append(translated.call_record)
             script = translated.text.strip() or script
+
+        # Resolve the text used for question generation -- independent of the
+        # narration language above, so narration can stay in one language
+        # while the questions are written in another. Only translates again
+        # when questions are actually being generated.
+        question_source = script
+        if question_language == "Same as input":
+            question_source = original_script
+        elif (
+            want_questions
+            and question_language
+            and question_language != "Same as narration"
+            and question_language != target_language
+        ):
+            translate_template = self.config.languages.get("translate_instruction")
+            if not translate_template:
+                raise AudioToAudioError("No translate_instruction configured under languages: in config.yaml.")
+            logger.info("audio_to_audio: translating script into %s for questions only", question_language)
+            try:
+                q_translated = translate_text(
+                    gemini_client=self.client, gemini_model=question_model, text=original_script,
+                    target_language=question_language, translate_instruction_template=translate_template,
+                    azure_deployment=azure_deployment, engine=engine, label="translate_questions",
+                )
+            except (GeminiCallError, TextGenerationError) as exc:
+                raise AudioToAudioError(f"Translation to {question_language} for questions failed: {exc}") from exc
+            calls.append(q_translated.call_record)
+            question_source = q_translated.text.strip() or question_source
 
         # Synthesise speech ---------------------------------------------------
         tts_instruction = (payload.instruction or "").strip() or None if mode != "topic" else None
@@ -253,8 +293,8 @@ class AudioToAudio(Capability):
         json_path: Path | None = None
         if want_questions:
             q_prompt = self._settings["questions_instruction"].format(
-                count=count, question_type=qtype, level=level, passage=script
-            )
+                count=count, question_type=qtype, level=level, passage=question_source
+            ) + language_instruction_suffix(question_language)
             logger.info("audio_to_audio: generating questions")
             try:
                 q_result = generate_text(
@@ -296,6 +336,7 @@ class AudioToAudio(Capability):
                 "mode": mode,
                 "language": language,
                 "target_language": target_language,
+                "question_language": question_language,
                 "asr_engine": asr_engine,
                 "question_model": question_model,
                 "tts_model": tts_model,
