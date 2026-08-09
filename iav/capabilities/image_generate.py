@@ -236,8 +236,22 @@ class ImageGenerate(Capability):
         label_json_path = None
 
         if use_label_placeholders:
+            # One question gets generated per placeholder (see below), so
+            # honoring the requested question count means asking the design
+            # step to design that many placeholders in the first place,
+            # rather than generating a fixed scheme and then trying to
+            # force the question count to match it after the fact.
+            target_count_line = ""
+            if want_questions:
+                target_count_line = (
+                    f"- One comprehension question is generated per placeholder, so aim for "
+                    f"about {count} placeholders total -- adjust down if the diagram genuinely "
+                    f"doesn't have that many distinct labelable parts rather than forcing "
+                    f"artificial ones, and don't let this override the audience/difficulty "
+                    f"guidance below.\n"
+                )
             design_prompt = self._settings["label_design_instruction"].format(
-                free_text=free_text, common_block=common_block(common)
+                free_text=free_text, common_block=common_block(common), target_count_line=target_count_line
             )
             logger.info("image_generate: designing label scheme before rendering (engine=%s)", engine)
             labels, design_call = self._run_label_design(

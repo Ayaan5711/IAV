@@ -99,6 +99,15 @@ class AudioToAudio(Capability):
                 raise FileNotFoundError(f"Input audio not found: {source}")
             audio_bytes = source.read_bytes()
             language = params.get("language") or self.config.languages.get("default_input_locale", "en-US")
+            if target_language == "Same as input":
+                # The only case where the narration language is knowable
+                # despite "Same as input" -- it's whatever locale was
+                # selected for transcription. azure_voice_by_language can't
+                # help here (it's keyed by language name, not locale, and
+                # "Same as input" isn't a language name at all).
+                locale_voice = (self.config.languages.get("azure_voice_by_locale") or {}).get(language)
+                if locale_voice:
+                    azure_voice = locale_voice
             asr_choice = (params.get("asr_engine") or "auto").lower()  # "auto" | "gemini" | "azure"
 
             transcript = None

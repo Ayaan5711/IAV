@@ -923,6 +923,15 @@ def _audio_questions_tab() -> None:
             "Voice (single-speaker only)", voices, index=_idx(voices, s.get("voice_preset")),
             key="aq-voice", disabled=multi_speaker,
         )
+        speaker1_voice, speaker2_voice = None, None
+        if multi_speaker:
+            cols_sp = st.columns(2)
+            speaker1_voice = cols_sp[0].selectbox(
+                "Speaker 1 voice", voices, index=_idx(voices, "Kore"), key="aq-speaker1voice",
+            )
+            speaker2_voice = cols_sp[1].selectbox(
+                "Speaker 2 voice", voices, index=_idx(voices, "Puck"), key="aq-speaker2voice",
+            )
         cols4 = st.columns(2)
         accents = s.get("accents") or ["Neutral"]
         accent = cols4[0].selectbox("Accent", accents, key="aq-accent")
@@ -966,6 +975,8 @@ def _audio_questions_tab() -> None:
                             "voice": voice,
                             "tts_engine": tts_engine,
                             "multi_speaker": multi_speaker,
+                            "speaker1_voice": speaker1_voice,
+                            "speaker2_voice": speaker2_voice,
                             "accent": accent,
                             "speed": speed,
                             "tone": tone,
@@ -1062,7 +1073,7 @@ def _generate_image_tab() -> None:
         "gi", default_count=int(s.get("default_question_count", 5))
     )
     if use_label_placeholders and want_questions:
-        st.caption("Count and level above are ignored in placeholder mode — one question is generated per placeholder, at whatever level the label design implies. Question type and language still apply.")
+        st.caption("Level above is ignored in placeholder mode — questions are generated at whatever level the label design implies. Count guides how many placeholders get designed (one question per placeholder), so it's a target, not a guarantee — the diagram may end up with more or fewer if that many distinct labelable parts don't genuinely exist. Question type and language still apply.")
     if use_label_placeholders and VENDOR_ENGINE != "gemini":
         st.caption(
             "ℹ If this ends up rendering via Azure DALL-E-3 (see Vendor in the sidebar), its "
@@ -1209,6 +1220,15 @@ def _generate_audio_tab() -> None:
             "Voice (single-speaker only)", voices, index=_idx(voices, s.get("voice_preset")),
             key="ga-voice", disabled=multi_speaker,
         )
+        speaker1_voice, speaker2_voice = None, None
+        if multi_speaker:
+            cols_sp = st.columns(2)
+            speaker1_voice = cols_sp[0].selectbox(
+                "Speaker 1 voice", voices, index=_idx(voices, "Kore"), key="ga-speaker1voice",
+            )
+            speaker2_voice = cols_sp[1].selectbox(
+                "Speaker 2 voice", voices, index=_idx(voices, "Puck"), key="ga-speaker2voice",
+            )
 
         formats = s.get("available_formats") or [s.get("output_format", "wav")]
         output_format = st.selectbox(
@@ -1238,6 +1258,8 @@ def _generate_audio_tab() -> None:
                             "target_audience": common.target_audience,
                             "question_type": common.question_type,
                             "multi_speaker": multi_speaker,
+                            "speaker1_voice": speaker1_voice,
+                            "speaker2_voice": speaker2_voice,
                             "accent": accent,
                             "speed": speed,
                             "tone": tone,

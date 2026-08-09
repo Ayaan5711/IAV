@@ -65,6 +65,8 @@ class AudioGenerate(Capability):
         length = params.get("length") or self._settings["lengths"][0]
         multi_speaker = bool(params.get("multi_speaker", False))
         voice = params.get("voice") or self._settings.get("voice_preset", "Kore")
+        speaker1_voice = params.get("speaker1_voice") or _MULTI_SPEAKER_VOICES[0]
+        speaker2_voice = params.get("speaker2_voice") or _MULTI_SPEAKER_VOICES[1]
 
         errors = validate_common_attributes(common) + validate_free_text(raw_text)
         if errors:
@@ -117,8 +119,8 @@ class AudioGenerate(Capability):
         instruction = style_instruction
         if multi_speaker:
             speakers = [
-                {"speaker": "Speaker1", "voice": _MULTI_SPEAKER_VOICES[0]},
-                {"speaker": "Speaker2", "voice": _MULTI_SPEAKER_VOICES[1]},
+                {"speaker": "Speaker1", "voice": speaker1_voice},
+                {"speaker": "Speaker2", "voice": speaker2_voice},
             ]
             # Multi-speaker always uses Gemini (enforced by
             # audio_generation.synthesize_speech), which needs the framing
@@ -179,6 +181,8 @@ class AudioGenerate(Capability):
                 "text_model": text_model,
                 "tts_engine": result.engine,
                 "multi_speaker": multi_speaker,
+                "speaker1_voice": speaker1_voice if multi_speaker else None,
+                "speaker2_voice": speaker2_voice if multi_speaker else None,
                 "accent": accent,
                 "speed": speed,
                 "tone": tone,
