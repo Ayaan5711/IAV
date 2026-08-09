@@ -15,6 +15,7 @@ from iav.capabilities._json_utils import JsonParseError, parse_json_loose
 from iav.capabilities.base import Capability, CapabilityInput, CapabilityOutput
 from iav.capabilities.prompt_schema import (
     CommonAttributes,
+    assessment_outcome_line,
     common_block,
     language_instruction_suffix,
     validate_common_attributes,
@@ -215,7 +216,9 @@ class ImageGenerate(Capability):
         label_json_path = None
 
         if use_label_placeholders:
-            design_prompt = self._settings["label_design_instruction"].format(free_text=free_text)
+            design_prompt = self._settings["label_design_instruction"].format(
+                free_text=free_text, common_block=common_block(common)
+            )
             logger.info("image_generate: designing label scheme before rendering (engine=%s)", engine)
             labels, design_call = self._run_label_design(
                 design_prompt, question_model, azure_deployment=azure_deployment, engine=engine
@@ -298,6 +301,7 @@ class ImageGenerate(Capability):
                 q_prompt = self._settings["placeholder_questions_instruction"].format(
                     question_type=qtype,
                     placeholder_summary=_format_placeholder_scheme_for_questions(labels),
+                    assessment_outcome_line=assessment_outcome_line(common),
                 ) + language_instruction_suffix(language)
                 logger.info(
                     "image_generate: generating questions from the label answer key "
@@ -314,7 +318,9 @@ class ImageGenerate(Capability):
                     raise ImageGenerateError(f"Question generation failed: {exc}") from exc
             else:
                 q_prompt = self._settings["questions_instruction"].format(
-                    count=count, question_type=qtype, level=level
+                    count=count, question_type=qtype, level=level,
+                    assessment_outcome_line=assessment_outcome_line(common),
+                    visual_type=visual_type, free_text=free_text,
                 ) + language_instruction_suffix(language)
                 logger.info(
                     "image_generate: generating questions from the image (language=%s, engine=%s)",
