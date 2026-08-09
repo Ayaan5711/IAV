@@ -260,10 +260,50 @@ languages:
     Ukrainian: uk-UA-PolinaNeural
     Romanian: ro-RO-AlinaNeural
 
+  # Same voices as azure_voice_by_language above, keyed by BCP-47 locale
+  # instead of language name. Used only for audio_to_audio's upload mode
+  # with narration language left at "Same as input" -- the one case where
+  # the actual language IS known (it's the locale selected for
+  # transcription, below) but has no explicit language name to look up in
+  # azure_voice_by_language. Punjabi omitted for the same reason as above.
+  azure_voice_by_locale:
+    en-IN: en-IN-NeerjaNeural
+    hi-IN: hi-IN-SwaraNeural
+    ta-IN: ta-IN-PallaviNeural
+    te-IN: te-IN-ShrutiNeural
+    bn-IN: bn-IN-TanishaaNeural
+    mr-IN: mr-IN-AarohiNeural
+    gu-IN: gu-IN-DhwaniNeural
+    kn-IN: kn-IN-SapnaNeural
+    ml-IN: ml-IN-SobhanaNeural
+    en-US: en-US-JennyNeural
+    en-GB: en-GB-SoniaNeural
+    ja-JP: ja-JP-NanamiNeural
+    ko-KR: ko-KR-SunHiNeural
+    zh-CN: zh-CN-XiaoxiaoNeural
+    ar-EG: ar-EG-SalmaNeural
+    fr-FR: fr-FR-DeniseNeural
+    de-DE: de-DE-KatjaNeural
+    es-ES: es-ES-ElviraNeural
+    pt-BR: pt-BR-FranciscaNeural
+    ru-RU: ru-RU-SvetlanaNeural
+    it-IT: it-IT-ElsaNeural
+    nl-NL: nl-NL-ColetteNeural
+    tr-TR: tr-TR-EmelNeural
+    vi-VN: vi-VN-HoaiMyNeural
+    th-TH: th-TH-PremwadeeNeural
+    id-ID: id-ID-GadisNeural
+    pl-PL: pl-PL-AgnieszkaNeural
+    uk-UA: uk-UA-PolinaNeural
+    ro-RO: ro-RO-AlinaNeural
+
   translate_instruction: |
     Translate the following text into {target_language}. Preserve the
     meaning, tone, and factual content exactly -- do not summarise,
     paraphrase beyond what the translation requires, or add commentary.
+    Keep it roughly the same length as the original (similar word count
+    and spoken duration) -- a direct translation, not an expanded or
+    embellished one.
     Return ONLY the translated text, nothing else.
 
     Text:
