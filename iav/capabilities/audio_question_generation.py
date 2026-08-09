@@ -69,6 +69,8 @@ class AudioQuestionGeneration(Capability):
         speed = params.get("speed") or self._settings["speeds"][0]
         tone = params.get("tone") or self._settings["tones"][0]
         multi_speaker = bool(params.get("multi_speaker", False))
+        speaker1_voice = params.get("speaker1_voice") or _MULTI_SPEAKER_VOICES[0]
+        speaker2_voice = params.get("speaker2_voice") or _MULTI_SPEAKER_VOICES[1]
         azure_deployment = self.config.azure_openai.get("default_deployment")
         engine = params.get("engine", "auto")
         tts_engine = params.get("tts_engine", "auto")
@@ -169,8 +171,8 @@ class AudioQuestionGeneration(Capability):
             instruction = f"{style_instruction}\n\n{payload.instruction.strip()}"
         if multi_speaker:
             speakers = [
-                {"speaker": "Speaker1", "voice": _MULTI_SPEAKER_VOICES[0]},
-                {"speaker": "Speaker2", "voice": _MULTI_SPEAKER_VOICES[1]},
+                {"speaker": "Speaker1", "voice": speaker1_voice},
+                {"speaker": "Speaker2", "voice": speaker2_voice},
             ]
             # Multi-speaker always uses Gemini (enforced by
             # audio_generation.synthesize_speech), which needs the framing
@@ -268,6 +270,8 @@ class AudioQuestionGeneration(Capability):
                 "voice": voice,
                 "tts_engine": tts_result.engine,
                 "multi_speaker": multi_speaker,
+                "speaker1_voice": speaker1_voice if multi_speaker else None,
+                "speaker2_voice": speaker2_voice if multi_speaker else None,
                 "accent": accent,
                 "speed": speed,
                 "tone": tone,
