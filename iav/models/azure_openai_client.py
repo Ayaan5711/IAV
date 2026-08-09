@@ -12,6 +12,7 @@ import base64
 import io
 import logging
 import os
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -105,6 +106,7 @@ MAX_IMAGE_PROMPT_CHARS = 4000
 
 
 _client_singleton = None
+_client_singleton_lock = threading.Lock()
 
 
 def is_configured() -> bool:
@@ -124,12 +126,19 @@ def is_configured() -> bool:
 
 def _get_client() -> "AzureOpenAI":
     global _client_singleton
+    # Streamlit serves concurrent user sessions as threads in one process
+    # by default -- an unlocked check-then-set here could otherwise race
+    # on the very first call from two sessions, construct two clients, and
+    # silently discard one (no corruption, just wasted init work, but
+    # avoidable with a lock).
     if _client_singleton is None:
-        _client_singleton = AzureOpenAI(
-            azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-            api_key=os.environ["AZURE_OPENAI_API_KEY"],
-            api_version=os.environ.get("AZURE_OPENAI_API_VERSION", DEFAULT_API_VERSION),
-        )
+        with _client_singleton_lock:
+            if _client_singleton is None:
+                _client_singleton = AzureOpenAI(
+                    azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+                    api_key=os.environ["AZURE_OPENAI_API_KEY"],
+                    api_version=os.environ.get("AZURE_OPENAI_API_VERSION", DEFAULT_API_VERSION),
+                )
     return _client_singleton
 
 

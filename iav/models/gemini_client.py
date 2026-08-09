@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -524,11 +525,20 @@ def _extract_usage(response: Any) -> UsageInfo | None:
 
 
 _client_singleton: GeminiClient | None = None
+_client_singleton_lock = threading.Lock()
 
 
 def get_client(config: Config | None = None) -> GeminiClient:
-    """Module-level singleton. The first call wins; subsequent calls reuse it."""
+    """Module-level singleton. The first call wins; subsequent calls reuse it.
+
+    Streamlit serves concurrent user sessions as threads in one process by
+    default -- an unlocked check-then-set here could otherwise race on the
+    very first call from two sessions, construct two clients, and silently
+    discard one (no corruption, just wasted init work, but avoidable).
+    """
     global _client_singleton
     if _client_singleton is None:
-        _client_singleton = GeminiClient(config or load_config())
+        with _client_singleton_lock:
+            if _client_singleton is None:
+                _client_singleton = GeminiClient(config or load_config())
     return _client_singleton
