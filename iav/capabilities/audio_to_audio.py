@@ -67,10 +67,18 @@ class AudioToAudio(Capability):
         sample_rate = int(self._settings.get("sample_rate_hz", 24000))
         azure_deployment = self.config.azure_openai.get("default_deployment")
         engine = params.get("engine", "auto")
-        azure_voice = self._settings.get("azure_voice")
         tts_engine = params.get("tts_engine", "auto")
         target_language = params.get("target_language") or self.config.languages.get(
             "default_output_language", "Same as input"
+        )
+        # Azure Neural voices are locale-specific -- pick one matching the
+        # narration's actual (post-translation) language instead of always
+        # using the capability's single English default, which would
+        # mispronounce anything translated into another language.
+        azure_voice = audio_generation.resolve_azure_voice(
+            target_language,
+            default_voice=self._settings.get("azure_voice"),
+            voice_map=self.config.languages.get("azure_voice_by_language"),
         )
         question_language = params.get("question_language") or "Same as narration"
         want_questions = bool(params.get("generate_questions", False))
