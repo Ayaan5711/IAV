@@ -14,6 +14,7 @@ the installed SDK version (1.50.0) does not expose a dedicated noise
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 import shutil
@@ -511,6 +512,27 @@ def synthesize_speech(text: str, *, voice: str) -> bytes:
             ) from rest_exc
 
 
+def _wav_has_audio_frames(data: bytes) -> bool:
+    """True if `data` parses as a WAV container with at least one actual
+    audio frame.
+
+    Observed in practice: Azure can report a "successful" synthesis that's
+    really just a bare RIFF header with zero samples (44 bytes -- the
+    minimal WAV header size, with no audio data after it) -- typically
+    when the requested voice can't produce intelligible speech for the
+    given text (e.g. an English voice given non-Latin-script text it can't
+    phonemize). Treating that as success would silently ship broken/near-
+    empty output. Returns True for anything that doesn't parse as WAV at
+    all, so this only rejects the specific "valid WAV, zero frames" case
+    rather than second-guessing formats it doesn't understand.
+    """
+    try:
+        with wave.open(io.BytesIO(data), "rb") as wav:
+            return wav.getnframes() > 0
+    except (wave.Error, EOFError):
+        return True
+
+
 def _synthesize_via_sdk(text: str, *, voice: str, key: str, region: str) -> bytes:
     speech_config = speechsdk.SpeechConfig(subscription=key, region=region)
     speech_config.speech_synthesis_voice_name = voice
@@ -527,13 +549,16 @@ def _synthesize_via_sdk(text: str, *, voice: str, key: str, region: str) -> byte
 
     if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
         audio_bytes = result.audio_data
-        if not audio_bytes:
-            # Observed in practice: the SDK reports success with 0 bytes of
-            # audio and no cancellation/error detail at all. Treating that
-            # as success would save a broken (empty) output file -- raise so
-            # the REST fallback above gets a real chance instead.
+        if not audio_bytes or not _wav_has_audio_frames(audio_bytes):
+            # Observed in practice: the SDK reports success with 0 bytes (or
+            # a header-only WAV with 0 frames) and no cancellation/error
+            # detail at all. Treating that as success would save a broken
+            # (silent) output file -- raise so the REST fallback above gets
+            # a real chance, and Auto mode can fall back to Gemini instead.
             raise AzureSpeechUnavailable(
-                "Azure Speech SDK reported synthesis completed but returned 0 bytes of audio."
+                f"Azure Speech SDK reported synthesis completed but returned no actual audio "
+                f"({len(audio_bytes)} bytes) -- often means the voice couldn't produce speech "
+                "for this text (e.g. a voice/language mismatch)."
             )
         logger.info("azure_speech: SDK synthesis completed (%d bytes)", len(audio_bytes))
         return audio_bytes
@@ -586,6 +611,12 @@ def _synthesize_via_rest(text: str, *, voice: str, key: str, region: str) -> byt
         raise AzureSpeechUnavailable(f"REST TTS returned HTTP {resp.status_code}: {resp.text[:300]}")
     if not resp.content:
         raise AzureSpeechUnavailable("REST TTS returned an empty response body.")
+    if not _wav_has_audio_frames(resp.content):
+        raise AzureSpeechUnavailable(
+            f"REST TTS returned a WAV response with no actual audio frames ({len(resp.content)} "
+            "bytes -- likely just a header) -- often means the voice couldn't produce speech "
+            "for this text (e.g. a voice/language mismatch)."
+        )
 
     logger.info("azure_speech: REST synthesis completed (%d bytes)", len(resp.content))
     return resp.content
