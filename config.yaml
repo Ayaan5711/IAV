@@ -233,7 +233,7 @@ languages:
 # from your Azure OpenAI resource -- rename it to match, and update the
 # pricing.models entry with the same key.
 azure_openai:
-  default_deployment: gpt-4o-mini
+  default_deployment: gpt-4.1 
   # Optional: an Azure OpenAI Images API deployment (DALL-E-3 or gpt-image-1)
   # for the image_generate/image_enhance engine selector. Set to null (or
   # leave the deployment missing on your Azure resource) to disable the
