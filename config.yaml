@@ -212,6 +212,46 @@ languages:
     - Ukrainian
     - Romanian
 
+  # Maps each output language above to a real Azure Neural voice for that
+  # locale. Without this, Azure TTS always narrates through the
+  # capability's single configured default voice (an English one)
+  # regardless of what language the script was translated into --
+  # producing mispronounced, not just accented, audio. A language with no
+  # entry here falls back to that default with a logged warning rather
+  # than a hard failure. Punjabi has no confirmed Azure Neural voice as of
+  # writing, so it's deliberately left unmapped -- verify any of these
+  # against Speech Studio's voice gallery for your Azure resource before
+  # relying on them; an invalid name fails loudly (Azure-only) or falls
+  # back to Gemini (Auto), never silently.
+  azure_voice_by_language:
+    English: en-US-JennyNeural
+    Hindi: hi-IN-SwaraNeural
+    Tamil: ta-IN-PallaviNeural
+    Telugu: te-IN-ShrutiNeural
+    Bengali: bn-IN-TanishaaNeural
+    Marathi: mr-IN-AarohiNeural
+    Gujarati: gu-IN-DhwaniNeural
+    Kannada: kn-IN-SapnaNeural
+    Malayalam: ml-IN-SobhanaNeural
+    Japanese: ja-JP-NanamiNeural
+    Korean: ko-KR-SunHiNeural
+    Mandarin Chinese: zh-CN-XiaoxiaoNeural
+    Arabic: ar-EG-SalmaNeural
+    French: fr-FR-DeniseNeural
+    German: de-DE-KatjaNeural
+    Spanish: es-ES-ElviraNeural
+    Portuguese: pt-BR-FranciscaNeural
+    Russian: ru-RU-SvetlanaNeural
+    Italian: it-IT-ElsaNeural
+    Dutch: nl-NL-ColetteNeural
+    Turkish: tr-TR-EmelNeural
+    Vietnamese: vi-VN-HoaiMyNeural
+    Thai: th-TH-PremwadeeNeural
+    Indonesian: id-ID-GadisNeural
+    Polish: pl-PL-AgnieszkaNeural
+    Ukrainian: uk-UA-PolinaNeural
+    Romanian: ro-RO-AlinaNeural
+
   translate_instruction: |
     Translate the following text into {target_language}. Preserve the
     meaning, tone, and factual content exactly -- do not summarise,

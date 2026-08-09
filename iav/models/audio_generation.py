@@ -47,6 +47,40 @@ class AudioSynthesisResult:
     call_record: dict[str, Any]  # ready to append to a capability's `calls` list
 
 
+def resolve_azure_voice(
+    language: str | None, *, default_voice: str | None, voice_map: dict[str, str] | None
+) -> str | None:
+    """Picks the Azure Neural voice matching the narration's actual
+    language, instead of always handing Azure the capability's single
+    configured default (which is always an English voice) regardless of
+    what language the script ended up in after translation.
+
+    An English voice reading non-English text doesn't just sound accented
+    -- it mispronounces it, since Azure Neural voices are locale-specific
+    (unlike Gemini's TTS, which infers pronunciation from the text itself
+    with no separate voice-per-language setting needed).
+
+    Falls back to `default_voice` when `language` is unset, "Same as
+    input"/"Same as narration" (no explicit target language is known in
+    that case -- the script could be in any language, and there's no
+    reliable signal here to pick a voice from), or has no entry in
+    `voice_map` (logs a warning so a silently-wrong-sounding narration has
+    a paper trail pointing at the missing mapping, not just Azure's own
+    audio).
+    """
+    if not language or language in ("Same as input", "Same as narration"):
+        return default_voice
+    voice = (voice_map or {}).get(language)
+    if not voice:
+        logger.warning(
+            "audio_generation: no Azure voice configured for language '%s' -- falling back to "
+            "'%s', which may not correctly pronounce this language",
+            language, default_voice,
+        )
+        return default_voice
+    return voice
+
+
 def wav_duration_seconds(wav_bytes: bytes) -> float:
     """Reads duration directly from a real WAV container's header -- for the
     Azure path, which returns a complete WAV file rather than raw PCM.

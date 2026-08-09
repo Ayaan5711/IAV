@@ -728,6 +728,12 @@ def _audio_to_audio_tab() -> None:
              "\"Same as input\" skips translation entirely. The comprehension questions below "
              "have their own, independent language setting.",
     )
+    if target_language == "Same as input" and VENDOR_ENGINE != "gemini":
+        st.caption(
+            "ℹ With \"Same as input\", Azure Neural TTS narrates using the default configured "
+            "voice regardless of what language the content ends up in — pick an explicit "
+            "narration language above if it's not English, so the matching Azure voice gets used."
+        )
 
     generate_questions, count, qtype, level, question_language = _questions_toggle_form(
         "a2a", default_count=int(s.get("default_question_count", 5))
@@ -890,6 +896,12 @@ def _audio_questions_tab() -> None:
         key="aq-questionlang",
         help="Writes the questions in this language, independent of the narration language above.",
     )
+    if target_language == "Same as input" and VENDOR_ENGINE != "gemini":
+        st.caption(
+            "ℹ With \"Same as input\", Azure Neural TTS narrates using the default configured "
+            "voice regardless of what language the content ends up in — pick an explicit "
+            "narration language above if it's not English, so the matching Azure voice gets used."
+        )
 
     cols = st.columns(2)
     speaker_mode = cols[0].selectbox("Speakers", s["speaker_modes"], key="aq-speakers")
