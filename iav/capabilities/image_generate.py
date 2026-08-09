@@ -36,21 +36,41 @@ class ImageGenerateError(RuntimeError):
 
 
 def _format_label_scheme_for_render(labels: list[dict]) -> str:
-    """One line per label, worded for the *image* model -- placeholders need
+    """Formats the label scheme for the *image* model -- placeholders need
     their concept described so the model knows where/how to draw the tag,
-    while being told explicitly never to print that concept as text.
+    while never printing that concept as text.
+
+    Deliberately avoids putting the words "given"/"placeholder" directly
+    next to each id as an all-caps category marker: in testing, the image
+    model echoed those exact words (and a placeholder's concept name) into
+    the rendered image as literal visible text instead of treating them as
+    instructions -- e.g. drawing the word "PLACEHOLDER" itself where a bare
+    tag letter should go. Grouping each kind under a single section header
+    (stated once, not per line) removes that pattern instead of just telling
+    the model not to copy it.
     """
-    lines = []
-    for item in labels:
-        lid = item.get("id", "?")
-        if item.get("kind") == "given":
-            lines.append(f'- {lid}: GIVEN -- render exactly as "{item.get("value", "")}"')
-        else:
-            lines.append(
-                f'- {lid}: PLACEHOLDER -- this part represents "{item.get("concept", "")}" '
-                f'(render ONLY the bare id "{lid}" here; never print the concept text)'
-            )
-    return "\n".join(lines)
+    given_lines = [
+        f'- {item.get("id", "?")}: draw the text "{item.get("value", "")}" here, nothing else'
+        for item in labels if item.get("kind") == "given"
+    ]
+    placeholder_lines = [
+        f'- {item.get("id", "?")}: place this at the part that is anatomically/conceptually the '
+        f'{item.get("concept", "")} -- draw ONLY the single character "{item.get("id", "?")}" here, '
+        f'never the words "{item.get("concept", "")}"'
+        for item in labels if item.get("kind") == "placeholder"
+    ]
+    parts = []
+    if given_lines:
+        parts.append(
+            "Parts that show their real name -- draw exactly the quoted text at each, nothing more:\n"
+            + "\n".join(given_lines)
+        )
+    if placeholder_lines:
+        parts.append(
+            "Parts that show ONLY a bare tag letter -- draw nothing but that single letter at each, "
+            "no words, no descriptions:\n" + "\n".join(placeholder_lines)
+        )
+    return "\n\n".join(parts)
 
 
 def _format_placeholder_scheme_for_questions(labels: list[dict]) -> str:

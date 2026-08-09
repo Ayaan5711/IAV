@@ -212,6 +212,46 @@ languages:
     - Ukrainian
     - Romanian
 
+  # Maps each output language above to a real Azure Neural voice for that
+  # locale. Without this, Azure TTS always narrates through the
+  # capability's single configured default voice (an English one)
+  # regardless of what language the script was translated into --
+  # producing mispronounced, not just accented, audio. A language with no
+  # entry here falls back to that default with a logged warning rather
+  # than a hard failure. Punjabi has no confirmed Azure Neural voice as of
+  # writing, so it's deliberately left unmapped -- verify any of these
+  # against Speech Studio's voice gallery for your Azure resource before
+  # relying on them; an invalid name fails loudly (Azure-only) or falls
+  # back to Gemini (Auto), never silently.
+  azure_voice_by_language:
+    English: en-US-JennyNeural
+    Hindi: hi-IN-SwaraNeural
+    Tamil: ta-IN-PallaviNeural
+    Telugu: te-IN-ShrutiNeural
+    Bengali: bn-IN-TanishaaNeural
+    Marathi: mr-IN-AarohiNeural
+    Gujarati: gu-IN-DhwaniNeural
+    Kannada: kn-IN-SapnaNeural
+    Malayalam: ml-IN-SobhanaNeural
+    Japanese: ja-JP-NanamiNeural
+    Korean: ko-KR-SunHiNeural
+    Mandarin Chinese: zh-CN-XiaoxiaoNeural
+    Arabic: ar-EG-SalmaNeural
+    French: fr-FR-DeniseNeural
+    German: de-DE-KatjaNeural
+    Spanish: es-ES-ElviraNeural
+    Portuguese: pt-BR-FranciscaNeural
+    Russian: ru-RU-SvetlanaNeural
+    Italian: it-IT-ElsaNeural
+    Dutch: nl-NL-ColetteNeural
+    Turkish: tr-TR-EmelNeural
+    Vietnamese: vi-VN-HoaiMyNeural
+    Thai: th-TH-PremwadeeNeural
+    Indonesian: id-ID-GadisNeural
+    Polish: pl-PL-AgnieszkaNeural
+    Ukrainian: uk-UA-PolinaNeural
+    Romanian: ro-RO-AlinaNeural
+
   translate_instruction: |
     Translate the following text into {target_language}. Preserve the
     meaning, tone, and factual content exactly -- do not summarise,
@@ -292,9 +332,6 @@ capabilities:
     narration_instruction: |
       Narrate the following content in a {tone} tone, at a {speed} pace,
       with a {accent} accent.
-
-      Content:
-      {passage}
     questions_instruction: |
       You are an experienced subject-matter expert generating exam-quality
       listening-comprehension questions.
@@ -665,12 +702,16 @@ capabilities:
       {label_summary}
 
       Rendering rules:
-      - Render every "given" label with its exact value/name shown, at the
-        correct part of the diagram.
-      - Render every "placeholder" label ONLY as its bare id (e.g. just
-        "X"), at the correct part of the diagram. Do not render, hint at, or
-        spell out what a placeholder represents anywhere in the image.
+      - Follow the instructions above exactly for what to draw at each
+        labelled part -- no more, no less.
       - Do not add any label, tag, or id that isn't listed above.
+      - Every tag must appear exactly once. Never reuse a tag on a second
+        part, and never leave a listed tag off the diagram.
+      - The only text allowed anywhere on the diagram is: the exact quoted
+        values above, and the single bare tag letters above. Never write
+        section headings, category words, or a placeholder's underlying
+        concept/name anywhere in the image -- those are instructions for
+        you, not text to draw.
       - Keep every id short, plain, and in a consistent font -- leave clear
         space around it so it's legible and doesn't overlap the diagram or
         other labels.
@@ -749,9 +790,6 @@ capabilities:
       a {accent} accent. Target length: {length}.
 
       {common_block}
-
-      Content:
-      {free_text}
 
   video_generate:
     model: veo-3.1-generate-preview

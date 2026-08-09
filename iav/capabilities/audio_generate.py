@@ -100,21 +100,36 @@ class AudioGenerate(Capability):
             if not content:
                 raise AudioGenerateError("Model returned no narration content.")
 
-        prompt = self._settings["prompt_template"].format(
-            tone=tone, speed=speed, accent=accent, length=length,
-            common_block=common_block(common), free_text=content,
+        # style_instruction (tone/speed/accent/length/assessment metadata) is
+        # guidance for Gemini's TTS, which follows natural-language framing
+        # and only speaks the actual content. Azure Neural TTS has no such
+        # understanding -- it reads whatever text it's given verbatim -- so
+        # the literal `script` must stay just the narration content; style
+        # guidance goes through `instruction` instead, a channel _call_azure()
+        # already ignores. Without this split, Azure would read the framing
+        # text ("Narrate the following content in a...") aloud as if it were
+        # the content itself.
+        style_instruction = self._settings["prompt_template"].format(
+            tone=tone, speed=speed, accent=accent, length=length, common_block=common_block(common),
         )
-
         speakers = None
+        script = content
+        instruction = style_instruction
         if multi_speaker:
             speakers = [
                 {"speaker": "Speaker1", "voice": _MULTI_SPEAKER_VOICES[0]},
                 {"speaker": "Speaker2", "voice": _MULTI_SPEAKER_VOICES[1]},
             ]
-            prompt += (
+            # Multi-speaker always uses Gemini (enforced by
+            # audio_generation.synthesize_speech), which needs the framing
+            # alongside the content in one script to restructure it into a
+            # labelled two-speaker dialogue -- safe to combine here since
+            # this path never reaches Azure.
+            script = f"{style_instruction}\n\nContent:\n{content}" + (
                 "\n\nRender this as a two-speaker dialogue. Label each line "
                 "'Speaker1:' or 'Speaker2:' before narrating it."
             )
+            instruction = None
 
         logger.info(
             "audio_generate: mode=%s tts_model=%s multi_speaker=%s accent=%s speed=%s tone=%s tts_engine=%s",
@@ -125,10 +140,11 @@ class AudioGenerate(Capability):
             result = audio_generation.synthesize_speech(
                 gemini_client=self.client,
                 gemini_model=tts_model,
-                script=prompt,
+                script=script,
                 label="narrate",
                 voice_preset=None if speakers else voice,
                 speakers=speakers,
+                instruction=instruction,
                 azure_voice=azure_voice,
                 engine=tts_engine,
             )
@@ -155,7 +171,7 @@ class AudioGenerate(Capability):
 
         return CapabilityOutput(
             file_path=output_path,
-            text=prompt,
+            text=script,
             metadata={
                 "mode": mode,
                 "narration_content": content,
