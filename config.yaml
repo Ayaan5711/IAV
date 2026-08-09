@@ -725,7 +725,7 @@ capabilities:
       """
 
       Rules:
-      - Choose a sensible number of placeholders for this description and
+      {target_count_line}- Choose a sensible number of placeholders for this description and
         the target audience/difficulty above; don't over- or under-label it
         (e.g. a school-level diagram should have fewer, more obvious
         placeholders than a postgraduate one).

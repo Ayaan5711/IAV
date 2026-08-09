@@ -1062,7 +1062,7 @@ def _generate_image_tab() -> None:
         "gi", default_count=int(s.get("default_question_count", 5))
     )
     if use_label_placeholders and want_questions:
-        st.caption("Count and level above are ignored in placeholder mode — one question is generated per placeholder, at whatever level the label design implies. Question type and language still apply.")
+        st.caption("Level above is ignored in placeholder mode — questions are generated at whatever level the label design implies. Count guides how many placeholders get designed (one question per placeholder), so it's a target, not a guarantee — the diagram may end up with more or fewer if that many distinct labelable parts don't genuinely exist. Question type and language still apply.")
     if use_label_placeholders and VENDOR_ENGINE != "gemini":
         st.caption(
             "ℹ If this ends up rendering via Azure DALL-E-3 (see Vendor in the sidebar), its "
