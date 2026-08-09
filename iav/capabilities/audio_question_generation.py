@@ -143,30 +143,47 @@ class AudioQuestionGeneration(Capability):
             question_source = q_translated.text.strip() or question_source
 
         # 2. Narrate the passage ----------------------------------------------
-        narration_prompt = self._settings["narration_instruction"].format(
-            tone=tone, speed=speed, accent=accent, passage=passage
+        # style_instruction (tone/speed/accent) is guidance for Gemini's TTS,
+        # which follows natural-language framing and only speaks the actual
+        # content. Azure Neural TTS has no such understanding -- it reads
+        # whatever text it's given verbatim -- so the literal `script` must
+        # stay just the passage; style guidance goes through `instruction`
+        # instead, a channel _call_azure() already ignores. Without this
+        # split, Azure would read the framing text ("Narrate the following
+        # content in a...") aloud as if it were the passage itself.
+        style_instruction = self._settings["narration_instruction"].format(
+            tone=tone, speed=speed, accent=accent
         )
         speakers = None
+        script = passage
+        instruction = style_instruction
+        if payload.instruction:
+            instruction = f"{style_instruction}\n\n{payload.instruction.strip()}"
         if multi_speaker:
             speakers = [
                 {"speaker": "Speaker1", "voice": _MULTI_SPEAKER_VOICES[0]},
                 {"speaker": "Speaker2", "voice": _MULTI_SPEAKER_VOICES[1]},
             ]
-            narration_prompt += (
+            # Multi-speaker always uses Gemini (enforced by
+            # audio_generation.synthesize_speech), which needs the framing
+            # alongside the passage in one script to restructure it into a
+            # labelled two-speaker dialogue -- safe to combine here since
+            # this path never reaches Azure.
+            script = f"{instruction}\n\nContent:\n{passage}" + (
                 "\n\nRender this as a two-speaker dialogue. Label each line "
                 "'Speaker1:' or 'Speaker2:' before narrating it."
             )
+            instruction = None
 
-        instruction = (payload.instruction or "").strip() or None
         logger.info(
             "audio_question_generation: synthesising narration, chars=%d, multi_speaker=%s, tts_engine=%s",
-            len(narration_prompt), multi_speaker, tts_engine,
+            len(script), multi_speaker, tts_engine,
         )
         try:
             tts_result = audio_generation.synthesize_speech(
                 gemini_client=self.client,
                 gemini_model=tts_model,
-                script=narration_prompt,
+                script=script,
                 label="narrate",
                 voice_preset=None if speakers else voice,
                 speakers=speakers,

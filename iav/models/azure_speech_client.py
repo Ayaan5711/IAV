@@ -527,6 +527,14 @@ def _synthesize_via_sdk(text: str, *, voice: str, key: str, region: str) -> byte
 
     if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
         audio_bytes = result.audio_data
+        if not audio_bytes:
+            # Observed in practice: the SDK reports success with 0 bytes of
+            # audio and no cancellation/error detail at all. Treating that
+            # as success would save a broken (empty) output file -- raise so
+            # the REST fallback above gets a real chance instead.
+            raise AzureSpeechUnavailable(
+                "Azure Speech SDK reported synthesis completed but returned 0 bytes of audio."
+            )
         logger.info("azure_speech: SDK synthesis completed (%d bytes)", len(audio_bytes))
         return audio_bytes
 

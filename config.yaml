@@ -292,9 +292,6 @@ capabilities:
     narration_instruction: |
       Narrate the following content in a {tone} tone, at a {speed} pace,
       with a {accent} accent.
-
-      Content:
-      {passage}
     questions_instruction: |
       You are an experienced subject-matter expert generating exam-quality
       listening-comprehension questions.
@@ -749,9 +746,6 @@ capabilities:
       a {accent} accent. Target length: {length}.
 
       {common_block}
-
-      Content:
-      {free_text}
 
   video_generate:
     model: veo-3.1-generate-preview
