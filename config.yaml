@@ -657,6 +657,9 @@ capabilities:
       {free_text}
 
       Constraints:
+      - Render exactly ONE diagram/figure -- do not duplicate, mirror, or
+        repeat it as two copies, side-by-side panels, or a comparison
+        layout, even if the composition would otherwise look sparse.
       - No watermarks, signatures, or overlaid text unless explicitly requested.
       - Content must be factually accurate and age-appropriate for the target audience.
       - Leave clear space around every label/tag so it doesn't overlap other
