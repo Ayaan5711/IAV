@@ -730,9 +730,8 @@ def _audio_to_audio_tab() -> None:
     )
     if target_language == "Same as input" and VENDOR_ENGINE != "gemini":
         st.caption(
-            "ℹ With \"Same as input\", Azure Neural TTS narrates using the default configured "
-            "voice regardless of what language the content ends up in — pick an explicit "
-            "narration language above if it's not English, so the matching Azure voice gets used."
+            "ℹ With \"Same as input\", non-English content may be narrated with the wrong-sounding "
+            "voice — pick the narration language explicitly if it's not English."
         )
 
     generate_questions, count, qtype, level, question_language = _questions_toggle_form(
@@ -898,9 +897,8 @@ def _audio_questions_tab() -> None:
     )
     if target_language == "Same as input" and VENDOR_ENGINE != "gemini":
         st.caption(
-            "ℹ With \"Same as input\", Azure Neural TTS narrates using the default configured "
-            "voice regardless of what language the content ends up in — pick an explicit "
-            "narration language above if it's not English, so the matching Azure voice gets used."
+            "ℹ With \"Same as input\", non-English content may be narrated with the wrong-sounding "
+            "voice — pick the narration language explicitly if it's not English."
         )
 
     cols = st.columns(2)
@@ -1073,13 +1071,11 @@ def _generate_image_tab() -> None:
         "gi", default_count=int(s.get("default_question_count", 5))
     )
     if use_label_placeholders and want_questions:
-        st.caption("Level above is ignored in placeholder mode — questions are generated at whatever level the label design implies. Count drives how many placeholders get designed (one question per placeholder) — the design step is told to hit it and retries once if it clearly falls short, but it may still end up lower for subjects that genuinely can't support that many distinct parts. Question type and language still apply.")
+        st.caption("Level above is ignored in placeholder mode — one question is generated per placeholder, matched to the label design. Count guides how many placeholders get designed; very simple diagrams may end up with fewer. Question type and language still apply.")
     if use_label_placeholders and VENDOR_ENGINE != "gemini":
         st.caption(
-            "ℹ If this ends up rendering via Azure DALL-E-3 (see Vendor in the sidebar), its "
-            "automatic prompt-rewriting step doesn't reliably preserve exact placeholder-labelling "
-            "instructions the way Gemini or Azure gpt-image-1 does — check the render before "
-            "trusting the label placement."
+            "ℹ If this renders via Azure DALL-E-3, exact placeholder labelling isn't guaranteed — "
+            "check the render before trusting the label placement."
         )
 
     with st.expander("Advanced options", expanded=False):
