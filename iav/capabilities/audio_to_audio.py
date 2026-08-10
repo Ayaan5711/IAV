@@ -247,6 +247,17 @@ class AudioToAudio(Capability):
             calls.append(translated.call_record)
             script = translated.text.strip() or script
 
+        if target_language == "Same as input" and mode != "upload":
+            # Topic/script modes have no ASR locale to fall back on the way
+            # upload mode does (handled above) -- best-effort guess the
+            # language from the script's own Unicode script composition
+            # instead of always assuming English for Azure's voice.
+            detected_language = audio_generation.detect_script_language(script)
+            if detected_language:
+                detected_voice = (self.config.languages.get("azure_voice_by_language") or {}).get(detected_language)
+                if detected_voice:
+                    azure_voice = detected_voice
+
         # Resolve the text used for question generation -- independent of the
         # narration language above, so narration can stay in one language
         # while the questions are written in another. Only translates again

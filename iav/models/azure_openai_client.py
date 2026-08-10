@@ -12,21 +12,67 @@ import base64
 import io
 import logging
 import os
+import threading
 from dataclasses import dataclass
 from typing import Any
 
 import requests
+from tenacity import before_sleep_log, retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
 try:
+    import openai as _openai_module
     from openai import AzureOpenAI
     _SDK_AVAILABLE = True
 except ImportError:
     AzureOpenAI = None  # type: ignore[assignment, misc]
+    _openai_module = None
     _SDK_AVAILABLE = False
 
 DEFAULT_API_VERSION = "2024-10-21"
+
+# Not read from config.yaml's retry: section -- that would require this
+# module to call load_config(), which resolves Vertex AI project/
+# credentials unconditionally and would make a pure-Azure setup (no Gemini
+# configured at all) fail just to read a retry count. Same numbers as
+# config.yaml's defaults, kept independent on purpose.
+_RETRY_ATTEMPTS = 3
+_RETRY_INITIAL_WAIT_SECONDS = 1.5
+_RETRY_MAX_WAIT_SECONDS = 30.0
+
+
+def _is_retryable_openai_error(exc: BaseException) -> bool:
+    """Restricts retries to genuinely transient failures -- rate limits,
+    server errors, and connection/timeout issues. Excludes bad requests,
+    auth failures, and not-found (e.g. a wrong deployment name, exactly
+    the DeploymentNotFound case this app has hit before) -- those fail
+    identically on every attempt, so retrying just triples the cost and
+    latency of a call that was never going to succeed.
+    """
+    if _openai_module is None:
+        return False
+    return isinstance(
+        exc,
+        (_openai_module.RateLimitError, _openai_module.InternalServerError, _openai_module.APIConnectionError),
+    )
+
+
+@retry(
+    reraise=True,
+    stop=stop_after_attempt(_RETRY_ATTEMPTS),
+    wait=wait_exponential(multiplier=_RETRY_INITIAL_WAIT_SECONDS, max=_RETRY_MAX_WAIT_SECONDS),
+    retry=retry_if_exception(_is_retryable_openai_error),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+)
+def _call_sdk(fn, /, **kwargs):
+    """Retries a single Azure OpenAI SDK call -- previously had zero retry
+    at all, so a transient blip meant either an unnecessary Gemini
+    fallback (Auto mode) or a hard failure (Azure-only mode), even though
+    the same class of transient error is exactly what Gemini's own client
+    already retries past.
+    """
+    return fn(**kwargs)
 
 
 class AzureOpenAIUnavailable(RuntimeError):
@@ -60,6 +106,7 @@ MAX_IMAGE_PROMPT_CHARS = 4000
 
 
 _client_singleton = None
+_client_singleton_lock = threading.Lock()
 
 
 def is_configured() -> bool:
@@ -79,12 +126,19 @@ def is_configured() -> bool:
 
 def _get_client() -> "AzureOpenAI":
     global _client_singleton
+    # Streamlit serves concurrent user sessions as threads in one process
+    # by default -- an unlocked check-then-set here could otherwise race
+    # on the very first call from two sessions, construct two clients, and
+    # silently discard one (no corruption, just wasted init work, but
+    # avoidable with a lock).
     if _client_singleton is None:
-        _client_singleton = AzureOpenAI(
-            azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-            api_key=os.environ["AZURE_OPENAI_API_KEY"],
-            api_version=os.environ.get("AZURE_OPENAI_API_VERSION", DEFAULT_API_VERSION),
-        )
+        with _client_singleton_lock:
+            if _client_singleton is None:
+                _client_singleton = AzureOpenAI(
+                    azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+                    api_key=os.environ["AZURE_OPENAI_API_KEY"],
+                    api_version=os.environ.get("AZURE_OPENAI_API_VERSION", DEFAULT_API_VERSION),
+                )
     return _client_singleton
 
 
@@ -101,7 +155,8 @@ def generate_text(prompt: str, *, deployment: str, response_mime_type: str | Non
 
     logger.info("azure_openai: generating text (deployment=%s, prompt_chars=%d)", deployment, len(prompt))
     try:
-        response = client.chat.completions.create(
+        response = _call_sdk(
+            client.chat.completions.create,
             model=deployment,
             messages=[{"role": "user", "content": prompt}],
             **kwargs,
@@ -157,7 +212,8 @@ def understand_image(
 
     logger.info("azure_openai: analysing image (deployment=%s, prompt_chars=%d)", deployment, len(prompt))
     try:
-        response = client.chat.completions.create(
+        response = _call_sdk(
+            client.chat.completions.create,
             model=deployment,
             messages=[{
                 "role": "user",
@@ -236,7 +292,7 @@ def generate_image(
     client = _get_client()
     logger.info("azure_openai: generating image (deployment=%s, size=%s)", deployment, size)
     try:
-        response = client.images.generate(model=deployment, prompt=prompt, size=size, quality=quality, n=1)
+        response = _call_sdk(client.images.generate, model=deployment, prompt=prompt, size=size, quality=quality, n=1)
     except Exception as exc:
         logger.exception("azure_openai: image generation failed (deployment=%s)", deployment)
         raise AzureOpenAIUnavailable(str(exc)) from exc
@@ -280,8 +336,17 @@ def edit_image(
     buf.name = f"image.{ext}"  # the SDK needs a filename to set the multipart content-type
 
     logger.info("azure_openai: editing image (deployment=%s, size=%s)", deployment, size)
+
+    def _edit_call() -> Any:
+        # buf is a file-like object with a read cursor -- a retry that
+        # re-reads it after a failed first attempt would otherwise send an
+        # empty/truncated image, since the cursor is already past EOF from
+        # the earlier attempt's read.
+        buf.seek(0)
+        return client.images.edit(model=deployment, image=buf, prompt=prompt, size=size, n=1)
+
     try:
-        response = client.images.edit(model=deployment, image=buf, prompt=prompt, size=size, n=1)
+        response = _call_sdk(_edit_call)
     except Exception as exc:
         logger.exception("azure_openai: image edit failed (deployment=%s)", deployment)
         raise AzureOpenAIUnavailable(str(exc)) from exc

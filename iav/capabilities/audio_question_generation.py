@@ -130,6 +130,17 @@ class AudioQuestionGeneration(Capability):
             calls.append(translated.call_record)
             passage = translated.text.strip() or passage
 
+        if target_language == "Same as input":
+            # No upload/ASR locale exists for this capability at all --
+            # best-effort guess the language from the passage's own Unicode
+            # script composition instead of always assuming English for
+            # Azure's voice.
+            detected_language = audio_generation.detect_script_language(passage)
+            if detected_language:
+                detected_voice = (self.config.languages.get("azure_voice_by_language") or {}).get(detected_language)
+                if detected_voice:
+                    azure_voice = detected_voice
+
         # 1c. Resolve the passage used for question generation -- independent
         # of the narration language above, so the narrated audio can stay in
         # one language while the questions are written in another.

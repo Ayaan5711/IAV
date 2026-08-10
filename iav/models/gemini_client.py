@@ -10,17 +10,19 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 from tenacity import (
     before_sleep_log,
     retry,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
@@ -33,6 +35,23 @@ logger = logging.getLogger(__name__)
 
 class GeminiCallError(RuntimeError):
     """Raised when a Gemini call fails after retries."""
+
+
+def _is_retryable_gemini_error(exc: BaseException) -> bool:
+    """Restricts retries to genuinely transient failures.
+
+    google.genai.errors.ClientError covers the whole 4xx range -- bad
+    request, invalid argument, safety-filter blocks, auth, not-found
+    (e.g. a bad model ID) -- all of which fail identically on every
+    attempt. Retrying those up to `attempts` times just multiplies the
+    cost and latency of a call that was never going to succeed. 429 (rate
+    limited) is the one 4xx genuinely worth retrying with backoff.
+    Anything else (ServerError/5xx, network-level errors, etc.) keeps the
+    previous retry-everything behavior, since those usually are transient.
+    """
+    if isinstance(exc, genai_errors.ClientError):
+        return exc.code == 429
+    return True
 
 
 @dataclass
@@ -123,7 +142,7 @@ class GeminiClient:
                 multiplier=retry_cfg.initial_wait_seconds,
                 max=retry_cfg.max_wait_seconds,
             ),
-            retry=retry_if_exception_type(Exception),
+            retry=retry_if_exception(_is_retryable_gemini_error),
             before_sleep=before_sleep_log(logger, logging.WARNING),
         )
         def _call() -> Any:
@@ -338,8 +357,21 @@ class GeminiClient:
             "generate_video: submitting model=%s duration=%ds resolution=%s location=%s",
             model, duration_seconds, resolution, location or self.config.vertex.location,
         )
+        retry_cfg = self.config.retry
+        retry_kwargs = dict(
+            reraise=True,
+            stop=stop_after_attempt(retry_cfg.attempts),
+            wait=wait_exponential(multiplier=retry_cfg.initial_wait_seconds, max=retry_cfg.max_wait_seconds),
+            retry=retry_if_exception(_is_retryable_gemini_error),
+            before_sleep=before_sleep_log(logger, logging.WARNING),
+        )
+
+        @retry(**retry_kwargs)
+        def _submit() -> Any:
+            return client.models.generate_videos(model=model, prompt=prompt, config=config)
+
         try:
-            operation = client.models.generate_videos(model=model, prompt=prompt, config=config)
+            operation = _submit()
         except Exception as exc:
             logger.exception("generate_video: submission failed (model=%s)", model)
             raise GeminiCallError(str(exc)) from exc
@@ -358,9 +390,18 @@ class GeminiClient:
             time.sleep(poll_interval_seconds)
             elapsed += poll_interval_seconds
             logger.debug("generate_video: polling operation %s (%.0fs elapsed)", operation.name, elapsed)
+
+            @retry(**retry_kwargs)
+            def _poll() -> Any:
+                return client.operations.get(operation)
+
             try:
-                operation = client.operations.get(operation)
+                operation = _poll()
             except Exception as exc:
+                # A transient blip here shouldn't be treated the same as a
+                # real failure -- the job is already submitted and billed;
+                # only give up on the whole operation after retries are
+                # exhausted, not on the first flaky poll.
                 logger.exception("generate_video: polling failed after %.0fs", elapsed)
                 raise GeminiCallError(str(exc)) from exc
 
@@ -484,11 +525,20 @@ def _extract_usage(response: Any) -> UsageInfo | None:
 
 
 _client_singleton: GeminiClient | None = None
+_client_singleton_lock = threading.Lock()
 
 
 def get_client(config: Config | None = None) -> GeminiClient:
-    """Module-level singleton. The first call wins; subsequent calls reuse it."""
+    """Module-level singleton. The first call wins; subsequent calls reuse it.
+
+    Streamlit serves concurrent user sessions as threads in one process by
+    default -- an unlocked check-then-set here could otherwise race on the
+    very first call from two sessions, construct two clients, and silently
+    discard one (no corruption, just wasted init work, but avoidable).
+    """
     global _client_singleton
     if _client_singleton is None:
-        _client_singleton = GeminiClient(config or load_config())
+        with _client_singleton_lock:
+            if _client_singleton is None:
+                _client_singleton = GeminiClient(config or load_config())
     return _client_singleton

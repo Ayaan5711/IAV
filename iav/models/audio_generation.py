@@ -81,6 +81,58 @@ def resolve_azure_voice(
     return voice
 
 
+# Unicode script ranges used only to guess a language name (for
+# resolve_azure_voice's voice_map) when "Same as input" leaves no other
+# signal -- e.g. topic/script mode, where there's no uploaded-audio locale
+# to fall back on the way upload mode has. Distinguishes *scripts*, not
+# languages: Hindi and Marathi share Devanagari and can't be told apart
+# this way, so Devanagari defaults to Hindi (the more common case for this
+# app) -- a script-detected guess is still better than always assuming
+# English for any non-Latin text, but it's not a substitute for the user
+# explicitly picking a narration language.
+_SCRIPT_LANGUAGE_RANGES: list[tuple[str, int, int]] = [
+    ("Hindi", 0x0900, 0x097F),        # Devanagari (also Marathi)
+    ("Bengali", 0x0980, 0x09FF),
+    ("Gujarati", 0x0A80, 0x0AFF),
+    ("Tamil", 0x0B80, 0x0BFF),
+    ("Telugu", 0x0C00, 0x0C7F),
+    ("Kannada", 0x0C80, 0x0CFF),
+    ("Malayalam", 0x0D00, 0x0D7F),
+    ("Arabic", 0x0600, 0x06FF),
+    ("Thai", 0x0E00, 0x0E7F),
+    ("Korean", 0xAC00, 0xD7A3),
+    ("Japanese", 0x3040, 0x30FF),     # hiragana/katakana -- kanji alone is ambiguous with Chinese
+    ("Mandarin Chinese", 0x4E00, 0x9FFF),
+]
+
+
+def detect_script_language(text: str | None, *, threshold: float = 0.3) -> str | None:
+    """Best-effort language guess from Unicode script composition.
+
+    Returns None if the text is empty, mostly ASCII/Latin (assume
+    English-compatible -- the default voice already handles that), or too
+    mixed to confidently attribute to one script (fewer than `threshold`
+    of its non-ASCII characters fall in a single recognized range).
+    """
+    if not text:
+        return None
+    counts: dict[str, int] = {}
+    total = 0
+    for ch in text:
+        cp = ord(ch)
+        if cp < 0x80:  # ASCII -- not informative either way, skip
+            continue
+        total += 1
+        for lang, lo, hi in _SCRIPT_LANGUAGE_RANGES:
+            if lo <= cp <= hi:
+                counts[lang] = counts.get(lang, 0) + 1
+                break
+    if not total or not counts:
+        return None
+    best_lang, best_count = max(counts.items(), key=lambda kv: kv[1])
+    return best_lang if best_count / total >= threshold else None
+
+
 def wav_duration_seconds(wav_bytes: bytes) -> float:
     """Reads duration directly from a real WAV container's header -- for the
     Azure path, which returns a complete WAV file rather than raw PCM.
