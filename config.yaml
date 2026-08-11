@@ -800,6 +800,13 @@ capabilities:
       - "placeholder" entries must include the underlying concept (for our
         internal answer key only) -- that concept text must never be
         rendered in the image itself.
+      - If a placeholder's concept is a comparison across multiple similar
+        parts (e.g. "the longest side", "the largest angle", "the warmest
+        region"), the illustrator drawing this later has no way to compare
+        shapes it hasn't drawn yet -- pin the part down by relation to an
+        already-given value instead (e.g. "the side opposite the given 80°
+        angle" rather than "the longest side"), so exactly one part matches
+        it unambiguously.
       - List entries in the order they should be labelled. Do not invent an
         id/tag yourself -- short tags (A, B, C, ...) are assigned
         automatically afterward, in the order you list them here.
@@ -818,9 +825,17 @@ capabilities:
       Rendering rules:
       - Follow the instructions above exactly for what to draw at each
         labelled part -- no more, no less.
-      - Do not add any label, tag, or id that isn't listed above.
+      - Do not add any label, tag, or id that isn't listed above. Not every
+        visible part needs a tag -- if the diagram naturally has more
+        distinct parts (e.g. sides, regions, components) than tags listed
+        above, leave the extra ones completely unlabelled. Do not stretch,
+        reuse, or duplicate a listed tag just to make every visible part
+        carry a label.
       - Every tag must appear exactly once. Never reuse a tag on a second
-        part, and never leave a listed tag off the diagram.
+        part, and never leave a listed tag off the diagram. Each tag maps to
+        one distinct location -- if two parts seem like they could both fit
+        a tag, pick exactly one of them and commit to it; do not place the
+        same tag in two places to hedge.
       - The only text allowed anywhere on the diagram is: the exact quoted
         values above, and the single bare tag letters above. Never write
         section headings, category words, or a placeholder's underlying
