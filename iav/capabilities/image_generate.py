@@ -251,16 +251,39 @@ class ImageGenerate(Capability):
         # (the chat/text deployment), not the image deployment.
         azure_deployment = self.config.azure_openai.get("default_deployment")
         engine = params.get("engine", "auto")
+
+        calls: list[dict] = []
+        labels: list[dict] | None = None
+        label_json_path = None
+
+        # Content specification -- turns the user's raw, often-vague free
+        # text into a concrete, self-consistent spec before anything else
+        # happens (before label design, before the render prompt is built).
+        # Image models are weak at precise numeric/geometric fidelity; a
+        # text model works out the actual correct values (e.g. a triangle's
+        # three angles, chosen so they sum to 180) so the image model only
+        # has to render them, not invent them.
+        content_spec_prompt = self._settings["content_spec_instruction"].format(
+            free_text=free_text, common_block=common_block(common)
+        )
+        logger.info("image_generate: preparing content spec (engine=%s)", engine)
+        try:
+            content_spec_result = generate_text(
+                gemini_client=self.client, gemini_model=question_model, prompt=content_spec_prompt,
+                label="content_spec", azure_deployment=azure_deployment, engine=engine,
+            )
+        except (GeminiCallError, TextGenerationError) as exc:
+            raise ImageGenerateError(f"Content specification failed: {exc}") from exc
+        calls.append(content_spec_result.call_record)
+        content_spec = content_spec_result.text.strip() or free_text
+        free_text = content_spec
+
         prompt = self._settings["prompt_template"].format(
             visual_type=visual_type,
             style=style,
             common_block=common_block(common),
             free_text=free_text,
         )
-
-        calls: list[dict] = []
-        labels: list[dict] | None = None
-        label_json_path = None
 
         if use_label_placeholders:
             # One question gets generated per placeholder (see below), so
@@ -438,6 +461,7 @@ class ImageGenerate(Capability):
                 "revised_prompt": result.revised_prompt,
                 "visual_type": visual_type,
                 "style": style,
+                "content_spec": content_spec,
                 "prompt": prompt,
                 "output_bytes": len(result.image_bytes),
                 "mime_type": image_mime_type,

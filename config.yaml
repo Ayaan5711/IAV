@@ -648,6 +648,54 @@ capabilities:
     available_formats: [png, jpeg]
     visual_types: [Diagram, Scenario, Chart]
     styles: [Flat illustration, Realistic, Line art, Watercolor, 3D render, Infographic]
+    # Runs before anything else (before label design, before the render
+    # prompt is built) -- turns the user's raw, often-vague free text into a
+    # concrete, self-consistent content spec. Image-generation models are
+    # weak at precise numeric/geometric fidelity (e.g. a triangle's angles
+    # actually summing to 180, being visibly scalene rather than arbitrary)
+    # -- if nothing ever decides the actual numbers, the image model invents
+    # them with zero mathematical grounding, which is exactly where it's
+    # weakest. This step does that reasoning with a text model instead
+    # (much better at it), producing specific correct values the image model
+    # just has to render, not invent. Deliberately does NOT decide what's
+    # given vs. hidden -- that split stays entirely the label-design step's
+    # job (see label_design_instruction) when placeholder mode is on; this
+    # step only makes sure the underlying facts are concrete and correct.
+    content_spec_instruction: |
+      You are preparing a precise content specification for an exam diagram,
+      before any drawing or labelling decisions are made. The request below
+      may be vague, incomplete, or missing exact values -- your job is to
+      resolve it into a single, fully-specified, internally consistent
+      description an illustrator could draw exactly as written, with no
+      further judgement calls left for them to make.
+
+      {common_block}
+
+      Request:
+      """
+      {free_text}
+      """
+
+      Rules:
+      - If the subject involves measurements, angles, quantities, or any
+        numeric/geometric relationship (e.g. a triangle's angles, a
+        circuit's component values, a graph's data points), invent
+        SPECIFIC, CORRECT, internally consistent values. For a triangle:
+        three angles that actually sum to 180 degrees, chosen so they're
+        visibly distinct if "scalene" was requested (or two equal for
+        "isosceles"). Do not leave anything as a vague placeholder like
+        "some angle" -- pick real numbers and state them plainly.
+      - Resolve every other ambiguity the same way: pick specific, sensible,
+        factually correct details rather than leaving them generic.
+      - Do NOT decide which parts should be hidden/unlabelled vs. shown --
+        describe the complete, fully-labelled picture. A separate step
+        decides what to hide, if anything.
+      - Stay strictly within what was asked -- make it concrete, don't add
+        unrelated content or change the subject.
+      - Match the level of detail to the target audience/difficulty above.
+      - Output ONLY the finished description, as plain prose an illustrator
+        would read directly -- no meta-commentary, no "Here is the
+        specification:", no markdown formatting, no headers.
     prompt_template: |
       Generate a {visual_type}, in a {style} style, suitable for use in an
       exam question.

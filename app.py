@@ -1141,6 +1141,11 @@ def _generate_image_tab() -> None:
                     "Download", data=fh.read(), file_name=result.file_path.name,
                     mime=result.metadata.get("mime_type", "image/png"),
                 )
+            if result.metadata.get("content_spec"):
+                with st.expander("Content specification (your description, made concrete)"):
+                    st.caption("Your description is elaborated into specific, self-consistent details "
+                               "(e.g. real angle values that sum to 180°) before anything is drawn or labelled.")
+                    st.text(result.metadata["content_spec"])
             with st.expander("Prompt sent"):
                 st.text(result.metadata.get("prompt", ""))
             if result.metadata.get("revised_prompt"):
