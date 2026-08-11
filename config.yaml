@@ -867,32 +867,46 @@ capabilities:
       Label scheme to follow exactly when drawing this diagram:
       {label_summary}
 
-      Rendering rules:
+      THE SINGLE MOST IMPORTANT RULE: read each label's instruction above
+      carefully to tell whether it names ONE specific part (e.g. "the side
+      opposite the 65° angle", "the organelle that produces ATP") or a
+      whole CATEGORY with several visible instances (e.g. "each of the
+      several chloroplasts scattered in the cytoplasm"). A one-specific-
+      part label goes on that one part and nowhere else -- never on a
+      second, different part too, even if it looks similar (two sides of
+      a shape are still two different parts). A whole-category label may
+      go on every instance of that category, but never strays onto a part
+      outside that category. Before you finish, check each label against
+      this distinction and correct any that ended up in the wrong place
+      or copied onto an unrelated part.
+
+      Further rendering rules:
       - Follow the instructions above exactly for what to draw at each
         labelled part -- no more, no less.
-      - Do not add any label, tag, or id that isn't listed above. Not every
-        visible part needs a tag -- if the diagram naturally has more
-        distinct parts (e.g. sides, regions, components) than tags listed
-        above, leave the extra ones completely unlabelled. Do not stretch,
-        reuse, or duplicate a listed tag just to make every visible part
-        carry a label.
-      - Every tag must appear exactly once. Never reuse a tag on a second
-        part, and never leave a listed tag off the diagram. Each tag maps to
-        one distinct location -- if two parts seem like they could both fit
-        a tag, pick exactly one of them and commit to it; do not place the
-        same tag in two places to hedge.
+      - Not every visible part needs a label. If the diagram naturally has
+        more distinct parts (sides, regions, components) than labels
+        listed above, leave the extra, unlisted ones completely
+        unlabelled -- that is correct and expected, not an omission to fix
+        by reusing a label.
       - The only text allowed anywhere on the diagram is: the exact quoted
-        values above, and the single bare tag letters above. Never write
-        section headings, category words, or a placeholder's underlying
-        concept/name anywhere in the image -- those are instructions for
-        you, not text to draw. This includes a placeholder part's real,
-        commonly-known name even if you recognise it and even if diagrams
-        of this subject are normally labelled with names -- the whole
-        point of a placeholder is that its name is withheld here; do not
-        add it "for clarity" or out of habit.
+        values above, and the single bare tag letters above -- nothing
+        else, and no added quotation marks or punctuation around them.
+        Never write section headings, category words, or a placeholder's
+        underlying concept/name anywhere in the image -- those are
+        instructions for you, not text to draw. This includes a
+        placeholder part's real, commonly-known name even if you
+        recognise it and even if diagrams of this subject are normally
+        labelled with names -- the whole point of a placeholder is that
+        its name is withheld here; do not add it "for clarity" or out of
+        habit.
       - Keep every id short, plain, and in a consistent font -- leave clear
         space around it so it's legible and doesn't overlap the diagram or
         other labels.
+      - If several parts are the same kind of thing (e.g. several
+        mitochondria, several chloroplasts), draw them with a consistent
+        appearance among themselves, but visually distinct from other,
+        different kinds of parts nearby -- do not reuse another part's
+        icon/shape/style for a different kind of structure.
     placeholder_questions_instruction: |
       Write exactly one {question_type} exam question per placeholder in
       the answer key below, testing whether the student can determine that

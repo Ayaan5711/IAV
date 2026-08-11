@@ -50,7 +50,9 @@ def _format_label_scheme_for_render(labels: list[dict]) -> str:
     the model not to copy it.
     """
     given_lines = [
-        f'- {item.get("id", "?")}: draw the text "{item.get("value", "")}" here, nothing else'
+        f'- (ref {item.get("id", "?")}, for your own bookkeeping only, not to be drawn) draw ONLY '
+        f'the quoted text "{item.get("value", "")}" at this location -- no letter, no quotation marks, '
+        f'no extra punctuation around it, just that text exactly as quoted'
         for item in labels if item.get("kind") == "given"
     ]
     placeholder_lines = [
@@ -62,7 +64,9 @@ def _format_label_scheme_for_render(labels: list[dict]) -> str:
     parts = []
     if given_lines:
         parts.append(
-            "Parts that show their real name -- draw exactly the quoted text at each, nothing more:\n"
+            "Parts that show their real name -- draw exactly the quoted text at each, nothing more "
+            "(the \"(ref X)\" at the start of each line below is only so you can match this "
+            "instruction to the right part of the diagram -- it is never itself drawn):\n"
             + "\n".join(given_lines)
         )
     if placeholder_lines:
