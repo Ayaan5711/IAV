@@ -902,7 +902,7 @@ capabilities:
 
       {assessment_outcome_line}Placeholder answer key (id -> concept/location -> the real answer):
       {placeholder_summary}
-
+      {given_block}
       Rules:
       - Ask the student to determine the "answer" value/identity itself
         (e.g. "What is the measure of the angle marked C?", "Which organelle
@@ -910,6 +910,12 @@ capabilities:
         never ask "What does C represent?" with the concept as the answer)
         -- the concept describes the part for your own reference, it is not
         the thing being tested.
+      - If a question's reasoning or explanation depends on a value/name
+        that's actually shown on the diagram (listed above, if present),
+        you MUST use that exact value -- never invent, assume, or guess a
+        different one, even if your invented value would also produce a
+        mathematically consistent explanation. A student checking your
+        explanation against their own diagram must see the same numbers.
       - Reference the label id directly in the stem so the student knows
         which part of the diagram it's about.
       - The "answer" field in your output must be the real value/identity

@@ -92,6 +92,25 @@ def _format_placeholder_scheme_for_questions(labels: list[dict]) -> str:
     )
 
 
+def _format_given_scheme_for_questions(labels: list[dict]) -> str:
+    """"given" entries only, worded as ground truth for the *question*
+    model -- it never sees the image, so this is the only way it learns
+    what's actually shown on the diagram (e.g. R1 = 8 ohms).
+
+    Without this, a question that requires reasoning from the given values
+    (e.g. "calculate the current" from a voltage and resistance) has no
+    real numbers to reason from -- observed fabricating plausible-looking
+    but wrong values for its explanation that don't match what the student
+    actually sees on the diagram, even though the final numeric answer
+    (computed earlier, independent of this step) happened to be correct.
+    """
+    return "\n".join(
+        f'- {item.get("id", "?")}: "{item.get("value", "")}"'
+        for item in labels
+        if item.get("kind") == "given"
+    )
+
+
 def _assign_label_ids(labels: object) -> None:
     """Assigns short, sequential ids (A, B, C, ...) to each label in place,
     instead of asking the model to invent them.
@@ -416,9 +435,19 @@ class ImageGenerate(Capability):
             # which is what caused duplicate/mismatched labels before.
             placeholder_entries = [item for item in labels if item.get("kind") == "placeholder"] if labels else []
             if placeholder_entries:
+                given_entries = [item for item in labels if item.get("kind") == "given"] if labels else []
+                given_block = ""
+                if given_entries:
+                    given_block = (
+                        "\nWhat's actually shown on the diagram (ground truth -- reasoning or "
+                        "an explanation that depends on one of these must use this exact "
+                        "value/name, never a different invented one):\n"
+                        + _format_given_scheme_for_questions(labels) + "\n"
+                    )
                 q_prompt = self._settings["placeholder_questions_instruction"].format(
                     question_type=qtype,
                     placeholder_summary=_format_placeholder_scheme_for_questions(labels),
+                    given_block=given_block,
                     assessment_outcome_line=assessment_outcome_line(common),
                 ) + language_instruction_suffix(language)
                 logger.info(
