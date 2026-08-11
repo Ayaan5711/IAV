@@ -677,14 +677,24 @@ capabilities:
       """
 
       Rules:
-      - If the subject involves measurements, angles, quantities, or any
-        numeric/geometric relationship (e.g. a triangle's angles, a
-        circuit's component values, a graph's data points), invent
-        SPECIFIC, CORRECT, internally consistent values. For a triangle:
-        three angles that actually sum to 180 degrees, chosen so they're
-        visibly distinct if "scalene" was requested (or two equal for
-        "isosceles"). Do not leave anything as a vague placeholder like
-        "some angle" -- pick real numbers and state them plainly.
+      - If the subject is INHERENTLY quantitative -- the kind of thing a
+        question could actually ask the student to compute or state (e.g. a
+        triangle's angles, a circuit's component values, a graph's data
+        points) -- invent SPECIFIC, CORRECT, internally consistent values
+        instead of leaving them vague. For a triangle: three angles that
+        actually sum to 180 degrees, chosen so they're visibly distinct if
+        "scalene" was requested (or two equal for "isosceles"). Do not
+        leave anything as a vague placeholder like "some angle" -- pick
+        real numbers and state them plainly.
+      - Do NOT invent this kind of numeric precision where it isn't
+        pedagogically relevant -- e.g. for anatomy, biology, maps, or other
+        illustrative subjects, describe structure/position/appearance
+        qualitatively (e.g. "the chloroplasts are oval and scattered
+        through the cytoplasm") the way a textbook diagram would; do not
+        fabricate exact coordinates, counts, or measurements in physical
+        units (micrometers, degrees, etc.) just because a number could be
+        attached -- that fabricated precision is not testable and makes the
+        description harder to draw correctly, not easier.
       - Resolve every other ambiguity the same way: pick specific, sensible,
         factually correct details rather than leaving them generic.
       - Do NOT decide which parts should be hidden/unlabelled vs. shown --
@@ -702,7 +712,23 @@ capabilities:
         number or fact, as if the whole picture were being shown.
       - Stay strictly within what was asked -- make it concrete, don't add
         unrelated content or change the subject.
-      - Match the level of detail to the target audience/difficulty above.
+      - Match SCOPE to the target audience/difficulty above -- this controls
+        how MANY distinct parts/values you include, not just how technical
+        the wording is:
+        - "school" / "easy": only the small set of parts a student at that
+          level is actually expected to know (commonly 4-8 major, familiar
+          parts) -- leave out fine sub-structures, rare exceptions, or
+          specialist terminology they wouldn't have encountered yet.
+        - "undergraduate" / "medium": the standard set a course at this
+          level would cover -- more parts and more precise terminology than
+          school level, but not an exhaustive expert-level inventory.
+        - "postgraduate" / "hard": the fuller, more technical picture,
+          including sub-structures and precise terminology where the
+          subject calls for it.
+        When unsure, prefer FEWER, more essential parts over an exhaustive
+        one -- a sparse diagram is easy to extend later; one bloated with
+        detail the target audience was never asked to know produces a
+        confusing, mismatched exam question.
       - Output ONLY the finished description, as plain prose an illustrator
         would read directly -- no meta-commentary, no "Here is the
         specification:", no markdown formatting, no headers.
@@ -744,6 +770,18 @@ capabilities:
 
       Generate {count} {question_type} questions at the {level} level based
       on what the image depicts. Do not invent details not shown in it.
+
+      Rules:
+      - Mix recall ("what is shown") with application/reasoning ("what does
+        this imply", "why", "what would happen if") appropriate to the
+        {level} level -- don't make every question a flat lookup.
+      - Each question must have exactly one unambiguously correct answer
+        supported by the image.
+      - For MCQ, distractors must be plausible and the same kind of thing as
+        the answer (drawn from genuinely confusable options), not
+        arbitrary or obviously-wrong filler.
+      - The "explanation" must state the actual reasoning/fact that makes
+        the answer correct, not just restate the question or the answer.
 
       Return ONLY a JSON object matching this schema:
       {{
@@ -797,9 +835,16 @@ capabilities:
         asked to find.
       - "given" entries must include the exact value/name to render on the
         diagram.
-      - "placeholder" entries must include the underlying concept (for our
-        internal answer key only) -- that concept text must never be
-        rendered in the image itself.
+      - "placeholder" entries must include TWO separate internal-only
+        fields, both of which must never be rendered in the image itself:
+        "concept" (a description used only to locate/place the tag, e.g.
+        "the third interior angle", "the organelle that produces ATP") and
+        "answer" (the actual, specific, correct value or identity of that
+        exact part, copied from the Description above, e.g. "80°",
+        "Mitochondria"). "concept" says where the tag goes; "answer" is
+        what a real exam question will ask the student to determine -- get
+        the real value from the Description, never leave it vague or
+        restate the concept as the answer.
       - If a placeholder's concept is a comparison across multiple similar
         parts (e.g. "the longest side", "the largest angle", "the warmest
         region"), the illustrator drawing this later has no way to compare
@@ -815,7 +860,7 @@ capabilities:
       {{
         "labels": [
           {{"kind": "given", "value": "<text to render>"}},
-          {{"kind": "placeholder", "concept": "<what it represents -- internal use only>"}}
+          {{"kind": "placeholder", "concept": "<what/where it is -- internal use only, for placing the tag>", "answer": "<the actual correct value/identity -- internal use only, for the exam question>"}}
         ]
       }}
     label_render_instruction: |
@@ -840,19 +885,45 @@ capabilities:
         values above, and the single bare tag letters above. Never write
         section headings, category words, or a placeholder's underlying
         concept/name anywhere in the image -- those are instructions for
-        you, not text to draw.
+        you, not text to draw. This includes a placeholder part's real,
+        commonly-known name even if you recognise it and even if diagrams
+        of this subject are normally labelled with names -- the whole
+        point of a placeholder is that its name is withheld here; do not
+        add it "for clarity" or out of habit.
       - Keep every id short, plain, and in a consistent font -- leave clear
         space around it so it's legible and doesn't overlap the diagram or
         other labels.
     placeholder_questions_instruction: |
-      Based strictly on the placeholder-to-concept mapping below (the answer
-      key for an exam diagram), write exactly one {question_type} question
-      per placeholder, asking the student to identify what that labelled
-      part represents. Reference the label id directly in the question
-      (e.g. "What does X represent in the diagram?").
+      Write exactly one {question_type} exam question per placeholder in
+      the answer key below, testing whether the student can determine that
+      labelled part's real value or identity -- using the diagram plus
+      whatever reasoning/domain knowledge is required, the same way a real
+      exam question would.
 
-      {assessment_outcome_line}Placeholder mapping:
+      {assessment_outcome_line}Placeholder answer key (id -> concept/location -> the real answer):
       {placeholder_summary}
+
+      Rules:
+      - Ask the student to determine the "answer" value/identity itself
+        (e.g. "What is the measure of the angle marked C?", "Which organelle
+        is labelled C?"), NOT to define or restate the "concept" text (e.g.
+        never ask "What does C represent?" with the concept as the answer)
+        -- the concept describes the part for your own reference, it is not
+        the thing being tested.
+      - Reference the label id directly in the stem so the student knows
+        which part of the diagram it's about.
+      - The "answer" field in your output must be the real value/identity
+        from the key above, worded naturally (e.g. "80°", "Mitochondria"),
+        never a restatement of the concept.
+      - The "explanation" must show genuine reasoning that justifies the
+        answer -- a calculation when one applies (e.g. "180° − 35° − 65° =
+        80°, since a triangle's interior angles sum to 180°"), or the
+        relevant fact/definition otherwise. Never write a circular
+        explanation like "C is the third angle" that just restates the
+        question.
+      - For MCQ, distractors must be plausible wrong answers a student could
+        actually produce (common calculation slips, confusable neighbouring
+        parts/concepts) -- not arbitrary or obviously-wrong filler.
 
       Return ONLY a JSON object matching this schema:
       {{
@@ -862,7 +933,7 @@ capabilities:
             "type": "<question_type>",
             "stem": "<the question text, referencing the label id>",
             "options": ["A...", "B...", "C...", "D..."],   // mcq only
-            "answer": "<the correct answer, from the concept>",
+            "answer": "<the real value/identity from the key, not the concept>",
             "explanation": "<one-sentence rationale>",
             "difficulty": "easy" | "medium" | "hard"
           }}

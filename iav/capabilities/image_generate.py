@@ -68,7 +68,11 @@ def _format_label_scheme_for_render(labels: list[dict]) -> str:
     if placeholder_lines:
         parts.append(
             "Parts that show ONLY a bare tag letter -- draw nothing but that single letter at each, "
-            "no words, no descriptions:\n" + "\n".join(placeholder_lines)
+            "no words, no descriptions. This applies even if you recognise what the part is actually "
+            "called (its real name is being withheld on purpose, for the student to identify) -- do "
+            "not write its common/textbook name next to the tag just because that's how such diagrams "
+            "are usually labelled elsewhere; here, the bare tag is the complete, final label:\n"
+            + "\n".join(placeholder_lines)
         )
     return "\n\n".join(parts)
 
@@ -76,9 +80,13 @@ def _format_label_scheme_for_render(labels: list[dict]) -> str:
 def _format_placeholder_scheme_for_questions(labels: list[dict]) -> str:
     """Placeholder entries only, worded as an answer key for the *question*
     model -- it never sees the image, so there's nothing left to re-guess.
+
+    Includes both the concept (what/where the part is) and the answer (its
+    actual value/identity) so the question model can ask the student to
+    determine the answer itself, rather than just to define the concept.
     """
     return "\n".join(
-        f'- {item.get("id", "?")}: {item.get("concept", "")}'
+        f'- {item.get("id", "?")}: concept="{item.get("concept", "")}" -> answer="{item.get("answer", "")}"'
         for item in labels
         if item.get("kind") == "placeholder"
     )
@@ -138,6 +146,9 @@ def _validate_label_scheme(labels: object) -> list[str]:
             concept = item.get("concept")
             if not isinstance(concept, str) or not concept.strip():
                 errors.append(f"Label '{lid}' is 'placeholder' but has no concept for the answer key.")
+            answer = item.get("answer")
+            if not isinstance(answer, str) or not answer.strip():
+                errors.append(f"Label '{lid}' is 'placeholder' but has no 'answer' value for the question.")
         else:
             errors.append(f"Label '{lid}' has an invalid 'kind' ({kind!r}); must be 'given' or 'placeholder'.")
 
