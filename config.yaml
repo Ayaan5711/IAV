@@ -690,6 +690,16 @@ capabilities:
       - Do NOT decide which parts should be hidden/unlabelled vs. shown --
         describe the complete, fully-labelled picture. A separate step
         decides what to hide, if anything.
+      - This applies even when the request itself says a part should be
+        hidden, unknown, "a placeholder", left blank, or "for the student to
+        find" -- that phrasing describes what the FINAL diagram will show,
+        not the underlying facts. Resolve it anyway: compute its real,
+        specific value (e.g. work out the third angle from the other two
+        given that a triangle's angles sum to 180 degrees) and state that
+        value plainly. Never write an algebraic symbol, question mark, or
+        word like "x", "?", "unknown", or "TBD" in place of a real value --
+        every quantity in this description must be a concrete, computed
+        number or fact, as if the whole picture were being shown.
       - Stay strictly within what was asked -- make it concrete, don't add
         unrelated content or change the subject.
       - Match the level of detail to the target audience/difficulty above.
@@ -774,12 +784,17 @@ capabilities:
       """
       {free_text}
       """
-
+      {original_request_block}
       Rules:
       {target_count_line}- Choose a sensible number of placeholders for this description and
         the target audience/difficulty above; don't over- or under-label it
         (e.g. a school-level diagram should have fewer, more obvious
         placeholders than a postgraduate one).
+      - If the original request (below the Description, when present) names or
+        implies which specific part(s) should be hidden/tested, make those
+        the placeholders instead of picking arbitrary ones -- it is the
+        strongest signal you have for what the student should actually be
+        asked to find.
       - "given" entries must include the exact value/name to render on the
         diagram.
       - "placeholder" entries must include the underlying concept (for our

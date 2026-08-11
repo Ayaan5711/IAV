@@ -275,6 +275,7 @@ class ImageGenerate(Capability):
         except (GeminiCallError, TextGenerationError) as exc:
             raise ImageGenerateError(f"Content specification failed: {exc}") from exc
         calls.append(content_spec_result.call_record)
+        original_request = free_text
         content_spec = content_spec_result.text.strip() or free_text
         free_text = content_spec
 
@@ -301,8 +302,21 @@ class ImageGenerate(Capability):
                     f"(e.g. a single simple object with only 2-3 real parts) -- don't stop at "
                     f"just the most obvious parts when more real ones exist.\n"
                 )
+            original_request_block = ""
+            if original_request.strip() and original_request.strip() != content_spec.strip():
+                original_request_block = (
+                    "\nThe user's original request, before it was elaborated into the "
+                    "Description above -- use this ONLY for hints on which part(s) they "
+                    "want tested as placeholders (e.g. it may say a specific angle, part, "
+                    "or value should be hidden/found/identified). The Description above "
+                    "remains authoritative for every value and fact; this is not a second "
+                    "source of facts.\n\"\"\"\n" + original_request.strip() + "\n\"\"\"\n"
+                )
             design_prompt = self._settings["label_design_instruction"].format(
-                free_text=free_text, common_block=common_block(common), target_count_line=target_count_line
+                free_text=free_text,
+                common_block=common_block(common),
+                target_count_line=target_count_line,
+                original_request_block=original_request_block,
             )
             logger.info("image_generate: designing label scheme before rendering (engine=%s)", engine)
             labels, design_call = self._run_label_design(
