@@ -392,6 +392,18 @@ capabilities:
       {passage}
       """
 
+      Rules:
+      - Mix recall ("what was said") with application/reasoning ("what does
+        this imply", "why", "what follows from this") appropriate to the
+        {level} level -- don't make every question a flat lookup.
+      - Each question must have exactly one unambiguously correct answer
+        supported by the passage.
+      - For MCQ, distractors must be plausible and the same kind of thing as
+        the answer (drawn from genuinely confusable options), not
+        arbitrary or obviously-wrong filler.
+      - The "explanation" must state the actual reasoning/fact that makes
+        the answer correct, not just restate the question or the answer.
+
       Return ONLY a JSON object matching this schema:
       {{
         "questions": [
@@ -444,6 +456,18 @@ capabilities:
 
       Generate {count} {question_type} questions at the {level} level based
       on what the image depicts. Do not invent details not shown in it.
+
+      Rules:
+      - Mix recall ("what is shown") with application/reasoning ("what does
+        this imply", "why", "what would happen if") appropriate to the
+        {level} level -- don't make every question a flat lookup.
+      - Each question must have exactly one unambiguously correct answer
+        supported by the image.
+      - For MCQ, distractors must be plausible and the same kind of thing as
+        the answer (drawn from genuinely confusable options), not
+        arbitrary or obviously-wrong filler.
+      - The "explanation" must state the actual reasoning/fact that makes
+        the answer correct, not just restate the question or the answer.
 
       Return ONLY a JSON object matching this schema:
       {{
@@ -544,6 +568,18 @@ capabilities:
       {passage}
       """
 
+      Rules:
+      - Mix recall ("what was said") with application/reasoning ("what does
+        this imply", "why", "what follows from this") appropriate to the
+        {level} level -- don't make every question a flat lookup.
+      - Each question must have exactly one unambiguously correct answer
+        supported by the script.
+      - For MCQ, distractors must be plausible and the same kind of thing as
+        the answer (drawn from genuinely confusable options), not
+        arbitrary or obviously-wrong filler.
+      - The "explanation" must state the actual reasoning/fact that makes
+        the answer correct, not just restate the question or the answer.
+
       Return ONLY a JSON object matching this schema:
       {{
         "questions": [
@@ -572,6 +608,19 @@ capabilities:
 
       Generate {count} {question_type} questions at the {level} level based
       strictly on what the video covers. Do not invent facts not in the video.
+
+      Rules:
+      - Mix recall ("what was shown/said") with application/reasoning
+        ("what does this imply", "why", "what follows from this")
+        appropriate to the {level} level -- don't make every question a
+        flat lookup.
+      - Each question must have exactly one unambiguously correct answer
+        supported by the video.
+      - For MCQ, distractors must be plausible and the same kind of thing as
+        the answer (drawn from genuinely confusable options), not
+        arbitrary or obviously-wrong filler.
+      - The "explanation" must state the actual reasoning/fact that makes
+        the answer correct, not just restate the question or the answer.
 
       Return ONLY a JSON object matching this schema:
       {{
@@ -746,6 +795,12 @@ capabilities:
         layout, even if the composition would otherwise look sparse.
       - No watermarks, signatures, or overlaid text unless explicitly requested.
       - Content must be factually accurate and age-appropriate for the target audience.
+      - If this includes specific measurements, angles, quantities, or any
+        numeric/geometric relationship, work out and use mutually
+        consistent, correct values before drawing (e.g. a triangle's three
+        angles must actually sum to 180 degrees; a circuit's stated values
+        must be self-consistent) -- do not draw approximate or arbitrary
+        numbers that merely look plausible.
       - Leave clear space around every label/tag so it doesn't overlap other
         lines, shapes, or labels -- legibility matters more than density.
       - Use plain, high-contrast text for any labels (dark text on a light
