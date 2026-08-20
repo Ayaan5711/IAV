@@ -296,22 +296,29 @@ class ImageGenerate(Capability):
         # Image models are weak at precise numeric/geometric fidelity; a
         # text model works out the actual correct values (e.g. a triangle's
         # three angles, chosen so they sum to 180) so the image model only
-        # has to render them, not invent them.
-        content_spec_prompt = self._settings["content_spec_instruction"].format(
-            free_text=free_text, common_block=common_block(common)
-        )
-        logger.info("image_generate: preparing content spec (engine=%s)", engine)
-        try:
-            content_spec_result = generate_text(
-                gemini_client=self.client, gemini_model=question_model, prompt=content_spec_prompt,
-                label="content_spec", azure_deployment=azure_deployment, engine=engine,
-            )
-        except (GeminiCallError, TextGenerationError) as exc:
-            raise ImageGenerateError(f"Content specification failed: {exc}") from exc
-        calls.append(content_spec_result.call_record)
+        # has to render them, not invent them. Only worth the extra call
+        # (and the risk of over-elaborating a simple request) when there's
+        # a label scheme that will actually depend on those facts being
+        # concrete -- skipped entirely for a plain image with no
+        # given/placeholder labelling, where the user's own wording should
+        # reach the image model unchanged.
+        content_spec: str | None = None
         original_request = free_text
-        content_spec = content_spec_result.text.strip() or free_text
-        free_text = content_spec
+        if use_label_placeholders:
+            content_spec_prompt = self._settings["content_spec_instruction"].format(
+                free_text=free_text, common_block=common_block(common)
+            )
+            logger.info("image_generate: preparing content spec (engine=%s)", engine)
+            try:
+                content_spec_result = generate_text(
+                    gemini_client=self.client, gemini_model=question_model, prompt=content_spec_prompt,
+                    label="content_spec", azure_deployment=azure_deployment, engine=engine,
+                )
+            except (GeminiCallError, TextGenerationError) as exc:
+                raise ImageGenerateError(f"Content specification failed: {exc}") from exc
+            calls.append(content_spec_result.call_record)
+            content_spec = content_spec_result.text.strip() or free_text
+            free_text = content_spec
 
         prompt = self._settings["prompt_template"].format(
             visual_type=visual_type,
