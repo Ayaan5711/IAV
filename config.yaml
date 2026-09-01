@@ -763,18 +763,25 @@ capabilities:
         unrelated content or change the subject.
       - Match SCOPE to the target audience/difficulty above -- this controls
         how MANY distinct parts/values you include, not just how technical
-        the wording is:
-        - "school" / "easy": only the small set of parts a student at that
-          level is actually expected to know (commonly 4-8 major, familiar
-          parts) -- leave out fine sub-structures, rare exceptions, or
-          specialist terminology they wouldn't have encountered yet.
-        - "undergraduate" / "medium": the standard set a course at this
-          level would cover -- more parts and more precise terminology than
-          school level, but not an exhaustive expert-level inventory.
-        - "postgraduate" / "hard": the fuller, more technical picture,
-          including sub-structures and precise terminology where the
-          subject calls for it.
-        When unsure, prefer FEWER, more essential parts over an exhaustive
+        the wording is. These are HARD CEILINGS, regardless of how many
+        real parts a rich subject (e.g. detailed anatomy) could technically
+        support -- a diagram that tries to show everything a subject
+        contains stops being reliably drawable and labellable:
+        - "school" / "easy": at most 4-8 major, familiar parts -- leave out
+          fine sub-structures, rare exceptions, or specialist terminology
+          they wouldn't have encountered yet.
+        - "undergraduate" / "medium": at most 6-10 parts -- the standard
+          set a course at this level would cover, with more precise
+          terminology than school level, but never an exhaustive inventory.
+        - "postgraduate" / "hard": at most 10-12 parts -- the fuller,
+          more technical picture, including sub-structures and precise
+          terminology, but still a deliberate selection, not everything
+          the subject contains.
+        When a subject could easily support far more than the ceiling
+        (e.g. a skull has dozens of nameable landmarks), choose only the
+        most essential, most commonly-taught ones up to that ceiling --
+        never approach completeness at the expense of the limit. When
+        unsure, prefer FEWER, more essential parts over an exhaustive
         one -- a sparse diagram is easy to extend later; one bloated with
         detail the target audience was never asked to know produces a
         confusing, mismatched exam question.
@@ -883,6 +890,15 @@ capabilities:
         the target audience/difficulty above; don't over- or under-label it
         (e.g. a school-level diagram should have fewer, more obvious
         placeholders than a postgraduate one).
+      - Design at most 10 labels TOTAL (given + placeholder combined),
+        regardless of how many distinct real parts the Description
+        mentions or how many more you could add from your own knowledge
+        of the subject. A diagram with more than about 10 labels is
+        unreliable to draw and label correctly -- if the Description
+        names more candidate parts than that, select only the most
+        essential/representative ones (prioritizing whichever the
+        original request, if present below, points to) rather than
+        trying to cover everything mentioned.
       - If the original request (below the Description, when present) names or
         implies which specific part(s) should be hidden/tested, make those
         the placeholders instead of picking arbitrary ones -- it is the
@@ -942,7 +958,13 @@ capabilities:
         more distinct parts (sides, regions, components) than labels
         listed above, leave the extra, unlisted ones completely
         unlabelled -- that is correct and expected, not an omission to fix
-        by reusing a label.
+        by reusing a label. This applies even when you recognise other
+        real, correctly-named parts of the subject from your own knowledge
+        (e.g. other named landmarks in an anatomical diagram) that aren't
+        in the list above -- do not add labels for them, no matter how
+        accurate or how conventional it would be in a real textbook
+        diagram of this subject. There are exactly as many labels as
+        listed above and no more; every other part stays completely bare.
       - The only text allowed anywhere on the diagram is: the exact quoted
         values above, and the single bare tag letters above -- nothing
         else, and no added quotation marks or punctuation around them.
