@@ -207,6 +207,30 @@ def _count_shortfall_note(labels: list[dict], target_count: int) -> str | None:
     )
 
 
+def _total_count_overflow_note(labels: list[dict], max_total: int) -> str | None:
+    """The other direction of _count_shortfall_note: is the design step
+    over the configured complexity ceiling?
+
+    The prompt already asks for at most `max_total` labels, but that's a
+    request, not a guarantee -- rich subjects (anatomy was the case that
+    surfaced this) can still come back over it. Feeding that back into the
+    same one-retry mechanism used for shortfalls and validation errors is
+    a real enforcement layer instead of just hoping the wording is
+    followed; if it's still over after the retry, it's accepted rather
+    than hard-failing the whole generation over a soft complexity target.
+    """
+    total = len(labels)
+    if total <= max_total:
+        return None
+    return (
+        f"{total} labels were designed, but the limit is {max_total} total (given + "
+        f"placeholder combined) -- diagrams denser than that render unreliably (duplicated, "
+        f"misplaced, or leaked labels). Cut down to the most essential/representative parts, "
+        f"prioritizing whichever the original request points to, until the total is at or "
+        f"under {max_total}."
+    )
+
+
 class ImageGenerate(Capability):
     name = "image_generate"
 
@@ -353,11 +377,13 @@ class ImageGenerate(Capability):
                     "remains authoritative for every value and fact; this is not a second "
                     "source of facts.\n\"\"\"\n" + original_request.strip() + "\n\"\"\"\n"
                 )
+            max_total_labels = int(self._settings.get("max_total_labels", 10))
             design_prompt = self._settings["label_design_instruction"].format(
                 free_text=free_text,
                 common_block=common_block(common),
                 target_count_line=target_count_line,
                 original_request_block=original_request_block,
+                max_total_labels=max_total_labels,
             )
             logger.info("image_generate: designing label scheme before rendering (engine=%s)", engine)
             labels, design_call = self._run_label_design(
@@ -367,10 +393,13 @@ class ImageGenerate(Capability):
 
             label_errors = _validate_label_scheme(labels)
             count_note = _count_shortfall_note(labels, count) if want_questions else None
-            if label_errors or count_note:
+            overflow_note = _total_count_overflow_note(labels, max_total_labels)
+            if label_errors or count_note or overflow_note:
                 feedback = list(label_errors)
                 if count_note:
                     feedback.append(count_note)
+                if overflow_note:
+                    feedback.append(overflow_note)
                 logger.warning(
                     "image_generate: label design had %d issue(s), retrying once: %s",
                     len(feedback), "; ".join(feedback),
@@ -389,10 +418,12 @@ class ImageGenerate(Capability):
                     raise ImageGenerateError(
                         "Label design still has problems after a retry: " + "; ".join(label_errors)
                     )
-                # A count shortfall after the retry is accepted rather than
-                # hard-failing -- some subjects genuinely can't support the
-                # requested count; the retry was a genuine second attempt at
-                # it, not a guarantee.
+                # A count shortfall or a still-over-the-cap total after the
+                # retry is accepted rather than hard-failing -- some subjects
+                # genuinely can't support the requested count, and blocking
+                # the whole generation over a soft complexity target would be
+                # worse than a slightly denser-than-ideal diagram; the retry
+                # was a genuine second attempt at both, not a guarantee.
 
             prompt = prompt + "\n\n" + self._settings["label_render_instruction"].format(
                 label_summary=_format_label_scheme_for_render(labels)

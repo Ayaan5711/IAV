@@ -820,6 +820,14 @@ capabilities:
     default_question_count: 5
     default_question_type: mcq      # mcq | short_answer | conceptual
     default_level: undergraduate    # school | undergraduate | postgraduate
+    # Ops-tunable ceiling on labelled-diagram complexity (given + placeholder
+    # combined), enforced both in the label-design prompt and as a real
+    # retry-triggering check in code -- found empirically: diagrams at or
+    # under this rendered reliably in testing, denser ones (e.g. a human
+    # skull at 13+ labels) started producing duplicated/misplaced/leaked
+    # labels. Not exposed in the UI -- tune here, not per-request, so a user
+    # can't accidentally recreate that failure by cranking it up.
+    max_total_labels: 10
     questions_instruction: |
       You are an experienced subject-matter expert generating exam-quality
       questions based strictly on the image provided.
@@ -890,12 +898,12 @@ capabilities:
         the target audience/difficulty above; don't over- or under-label it
         (e.g. a school-level diagram should have fewer, more obvious
         placeholders than a postgraduate one).
-      - Design at most 10 labels TOTAL (given + placeholder combined),
-        regardless of how many distinct real parts the Description
-        mentions or how many more you could add from your own knowledge
-        of the subject. A diagram with more than about 10 labels is
-        unreliable to draw and label correctly -- if the Description
-        names more candidate parts than that, select only the most
+      - Design at most {max_total_labels} labels TOTAL (given + placeholder
+        combined), regardless of how many distinct real parts the
+        Description mentions or how many more you could add from your own
+        knowledge of the subject. A diagram with more labels than that is
+        unreliable to draw and label correctly -- if the Description names
+        more candidate parts than that, select only the most
         essential/representative ones (prioritizing whichever the
         original request, if present below, points to) rather than
         trying to cover everything mentioned.
