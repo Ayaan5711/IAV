@@ -1097,17 +1097,26 @@ capabilities:
       {common_block}
 
   video_generate:
-    model: veo-3.1-generate-preview
-    available_models: [veo-3.1-generate-preview, veo-3.1-fast-generate-preview, veo-3.1-lite-generate-preview]
-    # Veo has historically had narrower regional availability than the
-    # text/image/audio models. "global" (used everywhere else in this app)
-    # returned 404 NOT_FOUND for every Veo tier on this project -- pinning
-    # video generation to a specific region as a first thing to try.
-    # If this still 404s, check Vertex AI -> Model Garden for Veo access
-    # on this project; it may need a separate allowlist request entirely.
+    # Veo 3.1 reached GA on 2025-11-17; the "-preview" model IDs below were
+    # deprecated with a 2026-04-02 migration deadline and now 404 -- that
+    # deadline, not region, was the actual cause of the earlier 404s (the
+    # region pin below was already correct and still is). Verified against
+    # Google's current documentation as of 2026-10.
+    model: veo-3.1-generate-001
+    available_models: [veo-3.1-generate-001, veo-3.1-fast-generate-001, veo-3.1-lite-generate-001]
+    # Confirmed current (2026-09) limitation, not just a first guess: Veo
+    # has no global-endpoint support at all, unlike every other model in
+    # this app, and has only ever worked in us-central1 on this project --
+    # EU regions 404 despite Google's own locations page listing them.
+    # Narrowed available_locations to just the one that actually works,
+    # rather than offer region choices in the UI that are known to fail.
     location: us-central1
-    available_locations: [us-central1, us-east4, europe-west4, global]
+    available_locations: [us-central1]
     resolution: "720p"
+    # 1080p is standard on the GA models. 4K/upscale exists but is a
+    # separate Google-side allowlisted feature on top of the base model
+    # access -- not offered as a selectable option here since it would
+    # fail without that separate approval.
     available_resolutions: ["720p", "1080p"]
     output_format: mp4   # the only format Veo returns -- no conversion needed
     duration_seconds: 8
