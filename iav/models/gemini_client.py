@@ -368,7 +368,12 @@ class GeminiClient:
 
         @retry(**retry_kwargs)
         def _submit() -> Any:
-            return client.models.generate_videos(model=model, prompt=prompt, config=config)
+            # The prompt/image/video kwargs on generate_videos are
+            # deprecated (SDK warns this may be removed any time after
+            # 2026-07-31, already past) in favour of wrapping them in a
+            # GenerateVideosSource -- same call, current calling convention.
+            source = genai_types.GenerateVideosSource(prompt=prompt)
+            return client.models.generate_videos(model=model, source=source, config=config)
 
         try:
             operation = _submit()
