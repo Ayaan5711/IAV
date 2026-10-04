@@ -8,6 +8,7 @@ one place.
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
 import threading
@@ -357,6 +358,76 @@ class GeminiClient:
             "generate_video: submitting model=%s duration=%ds resolution=%s location=%s",
             model, duration_seconds, resolution, location or self.config.vertex.location,
         )
+
+        def _submit() -> Any:
+            # The prompt/image/video kwargs on generate_videos are
+            # deprecated (SDK warns this may be removed any time after
+            # 2026-07-31, already past) in favour of wrapping them in a
+            # GenerateVideosSource -- same call, current calling convention.
+            source = genai_types.GenerateVideosSource(prompt=prompt)
+            return client.models.generate_videos(model=model, source=source, config=config)
+
+        return self._run_video_operation(
+            client=client,
+            submit_fn=_submit,
+            poll_interval_seconds=poll_interval_seconds,
+            poll_timeout_seconds=poll_timeout_seconds,
+            label="generate_video",
+        )
+
+    def extend_video(
+        self,
+        *,
+        model: str,
+        video_bytes: bytes,
+        video_mime_type: str,
+        prompt: str | None = None,
+        poll_interval_seconds: float = 10.0,
+        poll_timeout_seconds: float = 360.0,
+        location: str | None = None,
+    ) -> GenerationResult:
+        """Continue a video Veo itself previously generated (Veo's own
+        Extend -- NOT the same thing as Gemini Omni's edit/extend on
+        arbitrary footage, see interactions_video() below). Same
+        long-running operation flow as generate_video(); the source wraps
+        the existing clip's bytes instead of only a text prompt. Google
+        adds a fixed ~7 seconds per call (live-verified); duration/
+        resolution/aspect-ratio aren't configurable for an extend the way
+        they are for a fresh generation.
+        """
+        client = self._client_for(location)
+        config = genai_types.GenerateVideosConfig()
+        logger.info(
+            "extend_video: submitting model=%s input_bytes=%d location=%s",
+            model, len(video_bytes), location or self.config.vertex.location,
+        )
+
+        def _submit() -> Any:
+            source = genai_types.GenerateVideosSource(
+                prompt=prompt,
+                video=genai_types.Video(video_bytes=video_bytes, mime_type=video_mime_type),
+            )
+            return client.models.generate_videos(model=model, source=source, config=config)
+
+        return self._run_video_operation(
+            client=client,
+            submit_fn=_submit,
+            poll_interval_seconds=poll_interval_seconds,
+            poll_timeout_seconds=poll_timeout_seconds,
+            label="extend_video",
+        )
+
+    def _run_video_operation(
+        self,
+        *,
+        client: genai.Client,
+        submit_fn: Any,
+        poll_interval_seconds: float,
+        poll_timeout_seconds: float,
+        label: str,
+    ) -> GenerationResult:
+        """Shared submit-then-poll flow for Veo's long-running video
+        operations (generate_video() and extend_video() both end up here)."""
         retry_cfg = self.config.retry
         retry_kwargs = dict(
             reraise=True,
@@ -366,35 +437,26 @@ class GeminiClient:
             before_sleep=before_sleep_log(logger, logging.WARNING),
         )
 
-        @retry(**retry_kwargs)
-        def _submit() -> Any:
-            # The prompt/image/video kwargs on generate_videos are
-            # deprecated (SDK warns this may be removed any time after
-            # 2026-07-31, already past) in favour of wrapping them in a
-            # GenerateVideosSource -- same call, current calling convention.
-            source = genai_types.GenerateVideosSource(prompt=prompt)
-            return client.models.generate_videos(model=model, source=source, config=config)
-
         try:
-            operation = _submit()
+            operation = retry(**retry_kwargs)(submit_fn)()
         except Exception as exc:
-            logger.exception("generate_video: submission failed (model=%s)", model)
+            logger.exception("%s: submission failed", label)
             raise GeminiCallError(str(exc)) from exc
 
         elapsed = 0.0
         while not operation.done:
             if elapsed >= poll_timeout_seconds:
                 logger.error(
-                    "generate_video: timed out after %.0fs waiting on operation %s",
-                    elapsed, operation.name,
+                    "%s: timed out after %.0fs waiting on operation %s",
+                    label, elapsed, operation.name,
                 )
                 raise GeminiCallError(
-                    f"Video generation did not finish within {poll_timeout_seconds:.0f}s "
+                    f"Video operation did not finish within {poll_timeout_seconds:.0f}s "
                     "(it may still complete server-side; Veo latency can run up to several minutes)."
                 )
             time.sleep(poll_interval_seconds)
             elapsed += poll_interval_seconds
-            logger.debug("generate_video: polling operation %s (%.0fs elapsed)", operation.name, elapsed)
+            logger.debug("%s: polling operation %s (%.0fs elapsed)", label, operation.name, elapsed)
 
             @retry(**retry_kwargs)
             def _poll() -> Any:
@@ -407,28 +469,26 @@ class GeminiClient:
                 # real failure -- the job is already submitted and billed;
                 # only give up on the whole operation after retries are
                 # exhausted, not on the first flaky poll.
-                logger.exception("generate_video: polling failed after %.0fs", elapsed)
+                logger.exception("%s: polling failed after %.0fs", label, elapsed)
                 raise GeminiCallError(str(exc)) from exc
 
         if operation.error:
-            logger.error("generate_video: operation returned an error: %s", operation.error)
-            raise GeminiCallError(f"Video generation failed: {operation.error}")
+            logger.error("%s: operation returned an error: %s", label, operation.error)
+            raise GeminiCallError(f"Video operation failed: {operation.error}")
 
         result = operation.result or operation.response
         generated = (result.generated_videos or [None])[0] if result else None
         if generated is None or generated.video is None:
-            logger.error("generate_video: operation completed with no video in the response")
-            raise GeminiCallError("Video generation completed but returned no video.")
+            logger.error("%s: operation completed with no video in the response", label)
+            raise GeminiCallError("Video operation completed but returned no video.")
 
         video = generated.video
         video_bytes = video.video_bytes
         if not video_bytes and video.uri:
-            logger.debug("generate_video: downloading video bytes from %s", video.uri)
+            logger.debug("%s: downloading video bytes from %s", label, video.uri)
             video_bytes = client.files.download(file=generated)
 
-        logger.info(
-            "generate_video: completed in %.0fs, %d bytes", elapsed, len(video_bytes or b"")
-        )
+        logger.info("%s: completed in %.0fs, %d bytes", label, elapsed, len(video_bytes or b""))
         logger.info(
             "Gemini response metadata: operation_name=%s operation_metadata=%s mime_type=%s",
             operation.name, operation.metadata, video.mime_type,
@@ -438,6 +498,86 @@ class GeminiClient:
         gen_result.video_bytes = video_bytes
         gen_result.video_mime_type = video.mime_type or "video/mp4"
         return gen_result
+
+    def interactions_video(
+        self,
+        *,
+        model: str,
+        instruction: str,
+        task: str,
+        video_bytes: bytes | None = None,
+        video_mime_type: str | None = None,
+    ) -> GenerationResult:
+        """Gemini Omni's Interactions API: true video-to-video on ARBITRARY
+        footage (not just this app's own output, unlike extend_video()
+        above), plus text-to-video. Synchronous -- no polling, unlike
+        Veo's long-running generate_video()/extend_video().
+
+        task: "text_to_video" | "edit" | "extend" (edit/extend require
+        video_bytes; text_to_video doesn't take any).
+
+        The input shape matters more than it looks: the Interactions API
+        accepts both a flat content list and a list wrapped in a
+        "user_input" step, and ONLY the wrapped shape works for non-text
+        output on this account -- the flat shape fails with a 404 that
+        looks exactly like a permissions error and isn't one (confirmed
+        live, see the project's video-generation reference doc). Always
+        use the wrapped shape below.
+
+        Region: must be "global" -- the opposite of Veo, which requires
+        "us-central1" and has no "global" support for video.
+        """
+        if task in ("edit", "extend") and not video_bytes:
+            raise ValueError(f"interactions_video(task='{task}') requires video_bytes")
+
+        client = self._client_for("global")
+        content: list[dict[str, Any]] = []
+        if video_bytes:
+            content.append({
+                "type": "video",
+                "mime_type": video_mime_type or "video/mp4",
+                "data": base64.b64encode(video_bytes).decode("utf-8"),
+            })
+        content.append({"type": "text", "text": instruction})
+
+        retry_cfg = self.config.retry
+
+        @retry(
+            reraise=True,
+            stop=stop_after_attempt(retry_cfg.attempts),
+            wait=wait_exponential(multiplier=retry_cfg.initial_wait_seconds, max=retry_cfg.max_wait_seconds),
+            retry=retry_if_exception(_is_retryable_gemini_error),
+            before_sleep=before_sleep_log(logger, logging.WARNING),
+        )
+        def _call() -> Any:
+            return client.interactions.create(
+                model=model,
+                input=[{"type": "user_input", "content": content}],
+                generation_config={"video_config": {"task": task}},
+            )
+
+        logger.info("interactions_video: submitting model=%s task=%s", model, task)
+        try:
+            interaction = _call()
+        except Exception as exc:
+            logger.exception("interactions_video: call failed (model=%s task=%s)", model, task)
+            raise GeminiCallError(str(exc)) from exc
+
+        for step in getattr(interaction, "steps", None) or []:
+            if getattr(step, "type", None) != "model_output":
+                continue
+            for part in getattr(step, "content", None) or []:
+                if getattr(part, "type", None) == "video" and getattr(part, "data", None):
+                    video_out = base64.b64decode(part.data)
+                    logger.info("interactions_video: completed, %d bytes", len(video_out))
+                    return GenerationResult(
+                        video_bytes=video_out,
+                        video_mime_type="video/mp4",
+                        raw=interaction,
+                    )
+
+        logger.error("interactions_video: completed but returned no video part (status=%s)", getattr(interaction, "status", None))
+        raise GeminiCallError("Gemini Omni call completed but returned no video.")
 
 
 def _image_config(resolution: str | None, output_mime_type: str | None) -> genai_types.ImageConfig | None:

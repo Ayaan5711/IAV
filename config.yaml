@@ -713,6 +713,44 @@ capabilities:
       audio_codec: aac
       audio_bitrate: 160k
 
+  video_edit:
+    # Video -> Video: edit or extend footage that already exists. Two
+    # genuinely different mechanisms, both real video-to-video:
+    #   veo_extend  -- continues a clip Veo ITSELF previously generated.
+    #                  Fixed ~7s added per call (Google's documented
+    #                  behavior, confirmed live); up to 20 chained calls
+    #                  (148s ceiling per Google's docs, not exhaustively
+    #                  chained here -- one hop is live-verified).
+    #   omni_edit   -- transforms an ARBITRARY uploaded clip per instruction
+    #                  (not just this app's own output). Input capped at
+    #                  10 seconds -- live-verified hard limit (the API
+    #                  rejects anything longer with an explicit
+    #                  "exceeds maximum duration" error).
+    #   omni_extend -- continues an ARBITRARY uploaded clip. Same 10-second
+    #                  input cap as omni_edit.
+    #
+    # Omni is reachable ONLY via the preview-named model on this account as
+    # of 2026-10 -- the GA name ("gemini-omni-1.1-flash", no suffix)
+    # returns 400 "Unsupported model interaction" directly when tried.
+    # Re-check this periodically; don't assume "-preview" keeps responding
+    # indefinitely just because it has so far (its own documented shutdown
+    # date, 2026-09-30, has already passed).
+    veo_model: veo-3.1-lite-generate-001
+    available_veo_models: [veo-3.1-generate-001, veo-3.1-fast-generate-001, veo-3.1-lite-generate-001]
+    veo_extend_added_seconds: 7
+    # Same region pin as video_generate, same reason: Veo has no reliable
+    # 'global' support and EU regions 404 despite being listed as
+    # available. A one-off test of extend_video() against 'global'
+    # happened to succeed, but that's not enough to trust over the
+    # extensively-tested pin video_generate already relies on -- pinning
+    # here too rather than risking a flaky region for new code.
+    veo_location: us-central1
+    omni_model: gemini-omni-1.1-flash-preview
+    available_omni_models: [gemini-omni-1.1-flash-preview]
+    omni_max_input_seconds: 10
+    poll_interval_seconds: 10
+    poll_timeout_seconds: 360
+
   # ---------------------------------------------------------------------
   # Generate-from-scratch capabilities. Unlike the enhance/analyse tabs
   # above (which transform SME-supplied content), these take a structured
