@@ -691,6 +691,28 @@ capabilities:
       - Segments must not overlap and must be in chronological order.
       - Transcribe verbatim — do not paraphrase, summarise, or omit content.
 
+  video_combine:
+    # Joins several previously-generated clips (any mix of Veo / Gemini
+    # Omni output, or other footage) into one longer file. Pure ffmpeg --
+    # no Gemini call, $0 marginal cost per combine. Exists because no
+    # single video-generation call here natively produces more than a few
+    # seconds (base generation) to ~2.5 minutes (Veo Extend's documented
+    # ceiling) of continuous footage -- a real multi-topic lesson needs
+    # several separately-generated segments stitched together.
+    #
+    # Two paths, picked automatically at runtime:
+    #   - stream_copy: all clips share codec/resolution/frame rate ->
+    #     concat demuxer with -c copy. Lossless, near-instant.
+    #   - reencode: clips differ -> concat filter, full re-encode (slower,
+    #     routine) so mismatched clips still combine correctly.
+    encoder:
+      video_codec: libx264
+      preset: medium                 # ultrafast | superfast | veryfast | faster | fast | medium | slow
+      available_presets: [ultrafast, superfast, veryfast, faster, fast, medium, slow]
+      crf: 22                        # lower = better quality, larger file
+      audio_codec: aac
+      audio_bitrate: 160k
+
   # ---------------------------------------------------------------------
   # Generate-from-scratch capabilities. Unlike the enhance/analyse tabs
   # above (which transform SME-supplied content), these take a structured
