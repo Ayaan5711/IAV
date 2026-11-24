@@ -336,11 +336,23 @@ class GeminiClient:
         aspect_ratio: str = "16:9",
         resolution: str = "720p",
         generate_audio: bool = True,
+        image_bytes: bytes | None = None,
+        image_mime_type: str | None = None,
         poll_interval_seconds: float = 10.0,
         poll_timeout_seconds: float = 360.0,
         location: str | None = None,
     ) -> GenerationResult:
-        """Text-to-video via Veo. Long-running: submits a job, polls until done.
+        """Text-to-video via Veo, or image-conditioned ("first frame")
+        generation when image_bytes is given. Long-running: submits a job,
+        polls until done.
+
+        image_bytes is how a long-form video chains scene N+1 from scene
+        N's last extracted frame -- live-verified to preserve visual
+        continuity (same subject, pose, and setting across the cut), a
+        different Veo input path from both plain text-to-video (prompt
+        alone) and Extend (an existing video's bytes, see extend_video()).
+        Unlike Extend, this has no documented chain-length ceiling, since
+        each call is a fresh, independent generation.
 
         Veo operations don't return usage_metadata the way generate_content
         does -- billing is per second of generated video, not per token, so
@@ -355,8 +367,8 @@ class GeminiClient:
             generate_audio=generate_audio,
         )
         logger.info(
-            "generate_video: submitting model=%s duration=%ds resolution=%s location=%s",
-            model, duration_seconds, resolution, location or self.config.vertex.location,
+            "generate_video: submitting model=%s duration=%ds resolution=%s location=%s image_conditioned=%s",
+            model, duration_seconds, resolution, location or self.config.vertex.location, bool(image_bytes),
         )
 
         def _submit() -> Any:
@@ -364,7 +376,12 @@ class GeminiClient:
             # deprecated (SDK warns this may be removed any time after
             # 2026-07-31, already past) in favour of wrapping them in a
             # GenerateVideosSource -- same call, current calling convention.
-            source = genai_types.GenerateVideosSource(prompt=prompt)
+            image = (
+                genai_types.Image(image_bytes=image_bytes, mime_type=image_mime_type or "image/jpeg")
+                if image_bytes
+                else None
+            )
+            source = genai_types.GenerateVideosSource(prompt=prompt, image=image)
             return client.models.generate_videos(model=model, source=source, config=config)
 
         return self._run_video_operation(
