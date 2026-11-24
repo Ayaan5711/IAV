@@ -1,5 +1,14 @@
 # Gemini Media Enhancement POC — Planning & Scope
 
+> **Historical document.** This is the original plan, written before
+> video generation, video-to-video, clip-combining, or long-form video
+> existed — it still frames Veo as "generates new 8-second clips from
+> scratch" with no editing capability, which is now out of date (see
+> [`../docs/VIDEO_CAPABILITIES.md`](VIDEO_CAPABILITIES.md)). Useful for
+> the original use-case framing and architecture rationale; for current
+> capability status, read [`../CLAUDE.md`](../CLAUDE.md) and
+> `VIDEO_CAPABILITIES.md` instead.
+
 This document captures the refined scope, architecture, and build sequence for the POC, based on the real-world use cases provided by the SME content authoring team and the underlying capability analysis in the feasibility document.
 
 ---
