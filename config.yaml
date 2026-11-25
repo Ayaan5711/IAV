@@ -751,6 +751,25 @@ capabilities:
     poll_interval_seconds: 10
     poll_timeout_seconds: 360
 
+  video_hybrid_segment:
+    # Composes one educational-video segment from three different
+    # production techniques: Veo for realistic cinematic beats, Nano
+    # Banana + ffmpeg Ken Burns for infographic beats, Gemini TTS for a
+    # single narration track muxed over the whole thing. Designed off
+    # the hybrid-pipeline finding documented in
+    # docs/VIDEO_CAPABILITIES.md -- Veo produces strong realistic
+    # content but struggles with crisp infographics, which Nano Banana
+    # handles well (and gets text right, which Veo doesn't).
+    veo_model: veo-3.1-lite-generate-001
+    veo_location: us-central1
+    resolution: "720p"
+    image_model: gemini-3.1-flash-image
+    image_resolution: "2K"
+    tts_model: gemini-2.5-flash-preview-tts
+    tts_voice: Kore
+    poll_interval_seconds: 10
+    poll_timeout_seconds: 360
+
   # ---------------------------------------------------------------------
   # Generate-from-scratch capabilities. Unlike the enhance/analyse tabs
   # above (which transform SME-supplied content), these take a structured
