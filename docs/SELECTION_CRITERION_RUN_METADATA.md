@@ -2,8 +2,17 @@
 
 **Project:** TCS iON — "Selection Criterion" 15-min concept video
 **Generated on:** 2026-11-25
-**Pipeline:** IAV (HOELT POC) — hybrid Gemini / Veo / Nano Banana / Omni stack
-**Delivered file:** `storage/outputs/selection_criterion_lesson-20261125T094632Z-e0273f20.mp4`
+**Pipeline (this run):** IAV (HOELT POC) — hybrid Gemini / Veo / Nano Banana / Omni stack
+**Pipeline (next run, post-pivot):** Omni-only — Nano Banana + Gemini Omni 1.2 Flash GA + TTS, no Veo
+**Delivered file (this run):** `storage/outputs/selection_criterion_lesson-20261125T094632Z-e0273f20.mp4`
+
+> **Pricing note.** Figures below use Google's official rate card
+> (`ai.google.dev/gemini-api/docs/pricing` and
+> `cloud.google.com/model-garden/pricing`), confirmed 2026-11-25.
+> Gemini Omni 1.1 Flash is billed per output token at $17.50 / 1M,
+> which equates to $0.10/sec of 720p video (5,792 tokens/sec). The
+> $9/M figure some third-party sites quote is for the text-output
+> rate, not video-output — it does not apply here.
 
 ---
 
@@ -95,14 +104,44 @@ Earlier in our working notes the Omni cost was listed as $0 per call because no 
 
 ---
 
-## 7. What's next — options to discuss
+## 7. Pipeline direction after this run
 
-| Option | What it does | Added cost | Added time |
-|---|---|---|---|
-| **A. Ship as-is (6:18)** | Deliver the current MP4 to stakeholders | — | — |
-| **B. Expand to full 15 min** | Double beat counts per segment, roughly doubling Omni calls | ~$35 more (total ~$70) | ~40 min more |
-| **C. Omni-only comparison test** | Rebuild segment 1 using Omni alone (no Veo, no Nano Banana) to see whether a single-model pipeline matches the hybrid quality | ~$2 | ~5 min |
-| **D. Generalise to a utility** | Topic + target duration → full video, auto-planned (LLM writes the segment plan) | — (design + build work) | — |
+After a quality review with the project lead (Sharmila di — who
+approved segment 4 and raised the "why two video models?" question),
+the pipeline is pivoting to **Omni-only for all video generation**,
+keeping the rest of the hybrid structure intact:
+
+| Component | Before (this run) | After pivot |
+|---|---|---|
+| Realistic beats | Veo 3.1 Lite | **Gemini Omni 1.2 Flash GA (text-to-video)** |
+| Infographic slides | Nano Banana (gemini-3.1-flash-image) | *(unchanged — only image model that can render on-screen text legibly)* |
+| Infographic motion | Gemini Omni 1.1 Flash preview (edit) | **Gemini Omni 1.2 Flash GA (edit)** |
+| Narration | Gemini 2.5 Flash Preview TTS | *(unchanged)* |
+| Assembly | ffmpeg concat + mux | *(unchanged)* |
+
+### Why
+
+1. **A single text-to-video model answers "can we use just one video model?"** — yes, for live-action beats. Omni handles them. An Omni-only test of segment 1 confirmed the realistic beats hold up; the infographic beat however cannot drop Nano Banana (no video model, Omni included, can draw the "EVERY DAY, WE CHOOSE" slide with legible title + three labelled cards — image models are the only Google tier that gets on-screen text right).
+2. **Omni 1.2 Flash is now GA and 30% cheaper than 1.1** — $0.07/sec at 720p vs $0.10/sec — per Google Cloud's own blog (cloud.google.com/blog/products/ai-machine-learning/gemini-omni-1-2-flash-generally-available).
+3. **Our 1.1 preview was risk, not a feature** — its documented shutdown date (2026-09-30) has already passed. Staying on `gemini-omni-1.1-flash-preview` meant living on borrowed time; migrating to the GA name both removes that risk and lowers cost.
+
+### Expected cost on the next run
+
+At Omni 1.2's $0.07/sec, the same 310 seconds of Omni output (for a
+6:18 lesson at current beat counts) drops from ~$31 to **~$22**.
+Combined with dropping Veo's $1.60 (replaced by more Omni), the next
+run should sit around **$25–26 total / ₹2,100 INR** rather than
+~$36 / ₹3,000 for this one. For a 15-minute full-length lesson at
+doubled beat counts, rough budget is **~$50 / ₹4,200**.
+
+### Longer-term options
+
+| Option | What it does |
+|---|---|
+| **Ship as-is (6:18, 2026-11-25 run)** | Deliver the current MP4 to stakeholders |
+| **Re-run on Omni 1.2 only pipeline** | Same 11 segments, cheaper + single-video-model, re-render under the pivot |
+| **Expand to full 15 min** | Double beat counts per segment to hit 15-minute runtime |
+| **Generalise to a utility** | Topic + target duration → full video, auto-planned (LLM writes the segment plan) |
 
 ---
 

@@ -1,6 +1,6 @@
 """Segment 7: A structured selection process (8:30-10:00). ~40s."""
 from iav.capabilities.video_hybrid_segment import SegmentPlan
-from scripts.full_lesson._shared import veo, infog
+from scripts.full_lesson._shared import infog
 
 PLAN = SegmentPlan(
     title="Seg 7: Structured selection process",

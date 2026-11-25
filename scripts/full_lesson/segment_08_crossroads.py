@@ -1,11 +1,15 @@
-"""Segment 8: Selection at life crossroads (10:00-11:30). ~40s."""
+"""Segment 8: Selection at life crossroads (10:00-11:30). ~40s.
+
+Omni-only pipeline (no Veo). The opening live-action beat is Omni
+text-to-video.
+"""
 from iav.capabilities.video_hybrid_segment import SegmentPlan
-from scripts.full_lesson._shared import veo, infog
+from scripts.full_lesson._shared import omni_real, infog
 
 PLAN = SegmentPlan(
     title="Seg 8: Life crossroads",
     beats=[
-        veo(8,
+        omni_real(
             "A young adult in their early twenties stands on a quiet path at a "
             "fork in a park, looking thoughtfully at a wooden signpost with two "
             "arrow-shaped boards pointing in different directions. Soft golden "

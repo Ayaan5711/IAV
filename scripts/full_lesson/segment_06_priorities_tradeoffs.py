@@ -1,6 +1,6 @@
 """Segment 6: Priorities and trade-offs (7:00-8:30). ~40s."""
 from iav.capabilities.video_hybrid_segment import SegmentPlan
-from scripts.full_lesson._shared import veo, infog
+from scripts.full_lesson._shared import infog
 
 PLAN = SegmentPlan(
     title="Seg 6: Priorities and trade-offs",

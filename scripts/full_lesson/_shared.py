@@ -26,20 +26,38 @@ ANIMATE_PRESERVE = (
     "text labels exactly as currently written. Do not add any new text. "
 )
 
-VEO_REAL_BASE = (
+REAL_BASE = (
     "Realistic commercial-style video, shallow depth of field, cinematic quality. "
     "No readable text on signage, products, or packaging. No captions or titles "
     "appearing on screen."
 )
+# Backward-compat alias for existing imports elsewhere in the codebase.
+VEO_REAL_BASE = REAL_BASE
 
 
 def veo(duration: int, prompt: str, *, chain: bool = False) -> Beat:
-    """Realistic Veo beat. duration must be 4, 6, or 8."""
+    """DEPRECATED: Veo realistic beat. Retained so older segment files
+    that still import this helper keep working, but post 2026-11-25 the
+    pipeline direction is Omni-only -- new segment files should use
+    `omni_real()` instead. If called, still produces a Veo beat."""
     return Beat(
         kind="veo",
         duration_seconds=duration,
-        prompt=f"{VEO_REAL_BASE} {prompt}",
+        prompt=f"{REAL_BASE} {prompt}",
         chain_from_previous=chain,
+    )
+
+
+def omni_real(prompt: str) -> Beat:
+    """Realistic Omni text-to-video beat (replaces Veo in the Omni-only
+    pipeline). Fixed 10s output per call -- no duration argument. No
+    frame-chaining support (Omni's text_to_video doesn't take a seed
+    image); callers wanting shot continuity should merge the pair into
+    a single prompt covering both actions in sequence."""
+    return Beat(
+        kind="omni_realistic",
+        duration_seconds=10,
+        prompt=f"{REAL_BASE} {prompt}",
     )
 
 

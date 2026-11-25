@@ -104,6 +104,29 @@ pricing:
       unit: per_second_video
       rate_standard: 0.05
 
+    # Gemini Omni video generation. Billed per output token in Google's
+    # official schema (video output at $17.50/1M tokens, 5,792 tokens
+    # per 720p second = effective $0.10/sec), but because Omni calls do
+    # not return usage_metadata, we price by duration instead -- which
+    # is exact at 720p (Omni's fixed output length is 10s per call) and
+    # matches Google's published per-second figure. Confirmed against
+    # ai.google.dev/gemini-api/docs/pricing and
+    # cloud.google.com/model-garden/pricing (2026-11-25).
+    gemini-omni-1.1-flash-preview:
+      verified: true
+      unit: per_second_video
+      rate_standard: 0.10
+      rate_4k: 0.304
+    gemini-omni-1.2-flash:
+      # GA model, 30% cheaper than 1.1 per Google Cloud blog
+      # (cloud.google.com/blog/products/ai-machine-learning/
+      #  gemini-omni-1-2-flash-generally-available, 2026-11).
+      # Probe-verified responding on this project 2026-11-25.
+      verified: true
+      unit: per_second_video
+      rate_standard: 0.07
+      rate_4k: 0.213  # pro-rated from 1.1's 4K rate by the same 30% cut
+
     # Azure OpenAI pricing varies by region/commitment tier and isn't
     # confirmed against your actual Azure agreement -- these are public
     # list-price estimates. Each key below MUST match
@@ -745,8 +768,13 @@ capabilities:
     # extensively-tested pin video_generate already relies on -- pinning
     # here too rather than risking a flaky region for new code.
     veo_location: us-central1
-    omni_model: gemini-omni-1.1-flash-preview
-    available_omni_models: [gemini-omni-1.1-flash-preview]
+    # Omni 1.2 Flash is the GA model and ~30% cheaper than 1.1
+    # ($0.07/sec at 720p vs $0.10/sec). Switched 2026-11-25 after
+    # probe-verifying 1.2 responds on this project, and because 1.1's
+    # own documented shutdown date (2026-09-30) has passed -- staying
+    # on that preview name was risk, not conservatism.
+    omni_model: gemini-omni-1.2-flash
+    available_omni_models: [gemini-omni-1.2-flash, gemini-omni-1.1-flash-preview]
     omni_max_input_seconds: 10
     poll_interval_seconds: 10
     poll_timeout_seconds: 360
@@ -766,12 +794,13 @@ capabilities:
     image_model: gemini-3.1-flash-image
     image_resolution: "2K"
     # Optional: Gemini Omni for animated infographic beats
-    # (kind="infographic_animated"). Live-verified 2026-11-25 that Omni
-    # edit preserves Nano Banana's crisp text + geometry while adding
-    # real element-level motion (options sliding into funnels, cards
-    # emerging in color -- genuine motion graphics, not Ken Burns zoom).
-    # Capped at 10-second input/output per call.
-    omni_model: gemini-omni-1.1-flash-preview
+    # (kind="infographic_animated") AND -- post 2026-11-25 pivot -- for
+    # ALL realistic beats too (kind="omni_realistic"), replacing Veo
+    # entirely. Live-verified 2026-11-25 that Omni edit preserves Nano
+    # Banana's crisp text + geometry while adding real element-level
+    # motion. Switched to 1.2 Flash GA ($0.07/sec at 720p, 30% cheaper
+    # than 1.1-preview). Capped at 10-second output per call.
+    omni_model: gemini-omni-1.2-flash
     tts_model: gemini-2.5-flash-preview-tts
     tts_voice: Kore
     poll_interval_seconds: 10

@@ -1,6 +1,6 @@
 """Segment 2: What are selection criteria? (1:00-2:15). ~40s."""
 from iav.capabilities.video_hybrid_segment import SegmentPlan
-from scripts.full_lesson._shared import veo, infog
+from scripts.full_lesson._shared import infog
 
 PLAN = SegmentPlan(
     title="Seg 2: Goal, option, criterion",

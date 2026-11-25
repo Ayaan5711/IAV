@@ -55,8 +55,8 @@ class Beat:
     """One beat (clip) inside the segment. Enforced lightly -- the real
     validation happens when the respective generator is called."""
 
-    kind: str  # "veo" | "infographic"
-    prompt: str  # Veo scene description OR Nano Banana image prompt
+    kind: str  # "veo" | "infographic" | "infographic_animated" | "omni_realistic"
+    prompt: str  # scene / image / animation prompt depending on kind
     duration_seconds: int = 8
     chain_from_previous: bool = False  # veo only; use prior beat's last frame
     extra: dict[str, Any] = field(default_factory=dict)
@@ -160,7 +160,7 @@ class VideoHybridSegment(Capability):
                     # per call (Omni edit input cap); longer beats need
                     # chaining, which the caller handles by sequencing
                     # multiple "infographic_animated" beats.
-                    omni_model = (payload.params or {}).get("omni_model") or self._settings.get("omni_model", "gemini-omni-1.1-flash-preview")
+                    omni_model = (payload.params or {}).get("omni_model") or self._settings.get("omni_model", "gemini-omni-1.2-flash")
                     clip, image_usage = self._generate_animated_infographic_beat(
                         beat=beat,
                         image_model=image_model,
@@ -179,6 +179,30 @@ class VideoHybridSegment(Capability):
                         "label": f"beat{i+1}_infographic_anim",
                         "model": omni_model,
                         "usage": None,
+                        "duration_seconds": float(min(beat.duration_seconds, 10)),
+                        "resolution": resolution,
+                    })
+                    last_frame_bytes = None
+                elif beat.kind == "omni_realistic":
+                    # "omni_realistic" = Omni text-to-video, replaces Veo
+                    # in the pipeline after the 2026-11-25 pivot to drop
+                    # Veo. Each call produces 10s at 720p; shorter target
+                    # durations are rounded up by Omni itself. No frame
+                    # chaining (Omni text_to_video doesn't take a seed
+                    # image); merge chained pairs into a single prompt.
+                    omni_model = (payload.params or {}).get("omni_model") or self._settings.get("omni_model", "gemini-omni-1.2-flash")
+                    clip = self._generate_omni_realistic_beat(
+                        beat=beat,
+                        omni_model=omni_model,
+                        work=work,
+                        index=i + 1,
+                    )
+                    calls.append({
+                        "label": f"beat{i+1}_omni_realistic",
+                        "model": omni_model,
+                        "usage": None,
+                        "duration_seconds": float(min(beat.duration_seconds, 10)),
+                        "resolution": resolution,
                     })
                     last_frame_bytes = None
                 else:
@@ -269,6 +293,36 @@ class VideoHybridSegment(Capability):
             raise VideoHybridSegmentError("Veo beat returned no video bytes.")
 
         clip_path = save_output(result.video_bytes, ".mp4", capability=f"{self.name}_veo")
+        return clip_path
+
+    def _generate_omni_realistic_beat(
+        self, *, beat: Beat, omni_model: str, work: Path, index: int
+    ) -> Path:
+        """Omni text-to-video for realistic/cinematic beats (Veo replacement).
+
+        Omni outputs a fixed 10s clip per call at 720p -- duration_seconds
+        on the beat is advisory only. No image conditioning (Omni's
+        text_to_video mode takes a prompt only); callers wanting shot
+        continuity across beats should merge them into a single prompt.
+        """
+        try:
+            result = self.client.interactions_video(
+                model=omni_model,
+                instruction=beat.prompt,
+                task="text_to_video",
+            )
+        except GeminiCallError as exc:
+            raise VideoHybridSegmentError(
+                f"Omni realistic beat {index} failed: {exc}"
+            ) from exc
+
+        if not result.video_bytes:
+            raise VideoHybridSegmentError(
+                f"Omni realistic beat {index} returned no video bytes."
+            )
+
+        clip_path = output_path(".mp4", f"{self.name}_omni_realistic")
+        clip_path.write_bytes(result.video_bytes)
         return clip_path
 
     def _generate_infographic_beat(

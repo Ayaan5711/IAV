@@ -1,20 +1,30 @@
-"""Segment 1: Selection in everyday life (0:00-1:00). ~40s."""
+"""Segment 1: Selection in everyday life (0:00-1:00). ~40s.
+
+Omni-only pipeline: no Veo. Each realistic beat is 10s of Omni text-
+to-video. The two cookie-aisle shots that used to be a Veo chained
+pair are merged into a single 10s beat so the pivot is handled in a
+single continuous take instead of relying on frame-chaining.
+"""
 from iav.capabilities.video_hybrid_segment import SegmentPlan
-from scripts.full_lesson._shared import veo, infog
+from scripts.full_lesson._shared import omni_real, infog
 
 PLAN = SegmentPlan(
     title="Seg 1: Selection in everyday life",
     beats=[
-        veo(8, "A woman in her thirties stands in a grocery store aisle holding two "
-               "different boxes of cookies, one in each hand, comparing them thoughtfully. "
-               "Bright warm indoor lighting."),
-        veo(8, "The same woman smiles, places one box into her shopping cart, and "
-               "pushes the cart down the aisle. Same lighting, same wardrobe.",
-            chain=True),
-        veo(8, "Different scene: a man in his thirties at a modern car dealership "
-               "looking between two different cars (one silver sedan, one blue "
-               "compact SUV) parked side by side. Soft natural lighting through "
-               "large windows."),
+        # Merged: original beats 1 + 2 (chained via Veo). As one 10s
+        # Omni shot, the compare-then-place transition happens in a
+        # single continuous take, which is cleaner than the chain.
+        omni_real(
+            "A woman in her thirties stands in a grocery store aisle holding two "
+            "different boxes of cookies, one in each hand, comparing them "
+            "thoughtfully, then smiling and placing one box into her shopping "
+            "cart before pushing the cart down the aisle. Bright warm indoor "
+            "lighting, single continuous take."),
+        omni_real(
+            "A man in his thirties at a modern car dealership looking "
+            "thoughtfully between two different cars (one silver sedan, one "
+            "blue compact SUV) parked side by side. Soft natural lighting "
+            "through large windows, slow contemplative motion."),
         infog(10,
               "Title in bold dark navy sans-serif at the top center: 'EVERY DAY, WE "
               "CHOOSE'. Below the title, three equally-sized card icons in a row, "
