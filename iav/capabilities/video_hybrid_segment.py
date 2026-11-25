@@ -351,19 +351,25 @@ class VideoHybridSegment(Capability):
         return output
 
     def _mux_audio_over_video(self, *, video_path: Path, audio_path: Path, output: Path) -> None:
-        # Shortest keeps the output at the video's length; if the narration
-        # is shorter the tail is silent, if longer it's clipped. For a
-        # well-timed script (what the caller should supply), either is
-        # correct behaviour -- callers wanting exact sync should pace the
-        # script to match the sum of beat durations.
+        # Pad narration with silence to match video length -- deliberately
+        # NOT using -shortest here. First build caught this: a 54-second
+        # narration against a 64-second combined video with -shortest
+        # silently clipped 10 seconds off the ending (the final Veo beat's
+        # payoff shot got cut mid-action). A silent tail is the right
+        # default for teaching video -- lets the viewer absorb a closing
+        # beat without voice-over, which is a normal production choice;
+        # a clipped ending is just a bug. Callers wanting the audio to
+        # cover every frame should pace their narration to match the sum
+        # of beat durations.
         cmd = [
             "ffmpeg", "-y",
             "-i", str(video_path),
             "-i", str(audio_path),
-            "-map", "0:v:0", "-map", "1:a:0",
+            "-filter_complex", "[1:a]apad[padded]",
+            "-map", "0:v:0", "-map", "[padded]",
             "-c:v", "copy",
             "-c:a", "aac", "-b:a", "192k",
-            "-shortest",
+            "-shortest",  # with apad on the audio, this now means "match video length"
             "-movflags", "+faststart",
             str(output),
         ]
