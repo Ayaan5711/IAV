@@ -449,15 +449,40 @@ class VideoHybridSegment(Capability):
     # ------------------------------------------------------------------
 
     def _combine_beats(self, clip_paths: list[Path], output: Path) -> Path:
-        # Delegating to the already-tested VideoCombine capability keeps
-        # the timebase-sanity check (we hit a real silent-wrong-duration
-        # bug against mismatched clips earlier this session; VideoCombine
-        # now guards against it -- see docs/VIDEO_CAPABILITIES.md).
+        # Normalize: strip audio from every beat before concat. Beats can
+        # arrive with or without audio depending on the generator (Veo
+        # with generate_audio=False is silent; Omni edit always carries
+        # an audio stream in its output). VideoCombine's re-encode concat
+        # path uses `concat=n=N:v=1:a=1` which requires audio on every
+        # input -- mixing silent and audio-carrying clips makes it fail
+        # with "Stream specifier ':a:0' matches no streams". The hybrid
+        # capability always mutes the base video then mixes narration
+        # over the top in _mux_audio_over_video(), so dropping beat
+        # audio here is both correct and necessary.
         from iav.capabilities.base import CapabilityInput as _CapIn
+        work_dir = output.parent
+        stripped_paths: list[Path] = []
+        for i, src in enumerate(clip_paths):
+            stripped = work_dir / f"beat{i+1}_noaudio.mp4"
+            cmd = [
+                "ffmpeg", "-y", "-i", str(src),
+                "-an",  # drop audio
+                "-c:v", "copy",
+                "-movflags", "+faststart",
+                str(stripped),
+            ]
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+            if proc.returncode != 0:
+                stderr_tail = (proc.stderr or b"").decode("utf-8", errors="replace")[-600:]
+                raise VideoHybridSegmentError(
+                    f"audio-strip ffmpeg failed on beat {i+1} (exit {proc.returncode}): {stderr_tail}"
+                )
+            stripped_paths.append(stripped)
+
         combine = VideoCombine(config=self.config)
         combined = combine.process(_CapIn(
-            file_path=clip_paths[0],
-            params={"clip_paths": [str(p) for p in clip_paths[1:]]},
+            file_path=stripped_paths[0],
+            params={"clip_paths": [str(p) for p in stripped_paths[1:]]},
         ))
         # VideoCombine wrote to storage/outputs/; move to the caller's temp
         # path so this intermediate doesn't pollute the outputs dir.

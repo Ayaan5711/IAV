@@ -154,27 +154,66 @@ class VideoCombine(Capability):
 
     def _reencode_concat(self, clips: list[Path], out: Path, encoder: dict) -> str:
         """Fallback: concat filter + full re-encode -- works even when
-        clips differ in codec/resolution/frame rate."""
+        clips differ in codec/resolution/frame rate.
+
+        Probes each clip for an audio stream; builds the concat filter in
+        one of three modes:
+          - all clips have audio -> normal video+audio concat
+          - no clip has audio    -> video-only concat
+          - mixed                -> strip audio by muxing silent (not yet
+                                     implemented; fail loudly so the caller
+                                     normalizes upstream)
+
+        The all-silent case matters for the hybrid-segment capability,
+        which always combines silent beats then muxes narration over the
+        top -- hardcoded `a=1` previously failed loudly there with
+        "Stream specifier ':a:0' matches no streams".
+        """
+        has_audio = [_has_audio_stream(c) for c in clips]
+        all_audio = all(has_audio)
+        no_audio = not any(has_audio)
+        if not (all_audio or no_audio):
+            missing = [str(c) for c, ok in zip(clips, has_audio) if not ok]
+            raise VideoCombineError(
+                "re-encode concat requires inputs to either all have audio "
+                "or all be silent; mixed inputs would require a muxed-silent "
+                "pass the caller should handle. Clips without audio: "
+                + ", ".join(missing)
+            )
+
         cmd = ["ffmpeg", "-y"]
         for clip in clips:
             cmd += ["-i", str(clip)]
 
         n = len(clips)
-        filter_parts = "".join(f"[{i}:v:0][{i}:a:0]" for i in range(n))
-        filter_complex = f"{filter_parts}concat=n={n}:v=1:a=1[outv][outa]"
+        if all_audio:
+            filter_parts = "".join(f"[{i}:v:0][{i}:a:0]" for i in range(n))
+            filter_complex = f"{filter_parts}concat=n={n}:v=1:a=1[outv][outa]"
+            maps = ["-map", "[outv]", "-map", "[outa]"]
+            audio_codec_flags = [
+                "-c:a", encoder.get("audio_codec", "aac"),
+                "-b:a", encoder.get("audio_bitrate", "160k"),
+            ]
+        else:  # no_audio
+            filter_parts = "".join(f"[{i}:v:0]" for i in range(n))
+            filter_complex = f"{filter_parts}concat=n={n}:v=1:a=0[outv]"
+            maps = ["-map", "[outv]"]
+            audio_codec_flags = []
 
         cmd += [
             "-filter_complex", filter_complex,
-            "-map", "[outv]", "-map", "[outa]",
+            *maps,
             "-c:v", encoder.get("video_codec", "libx264"),
             "-preset", encoder.get("preset", "medium"),
             "-crf", str(encoder.get("crf", 22)),
-            "-c:a", encoder.get("audio_codec", "aac"),
-            "-b:a", encoder.get("audio_bitrate", "160k"),
+            *audio_codec_flags,
             "-movflags", "+faststart",
             str(out),
         ]
-        logger.info("video_combine: re-encode concat: %s", " ".join(cmd))
+        logger.info(
+            "video_combine: re-encode concat (audio=%s): %s",
+            "yes" if all_audio else "no", " ".join(cmd),
+        )
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         if proc.returncode != 0:
             stderr_tail = (proc.stderr or b"").decode("utf-8", errors="replace")[-1500:]
@@ -186,6 +225,15 @@ class VideoCombine(Capability):
 
 
 _DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
+_AUDIO_STREAM_RE = re.compile(r"Stream #\d+:\d+(?:\[[^\]]+\])?(?:\([^)]+\))?:\s*Audio:")
+
+
+def _has_audio_stream(path: Path) -> bool:
+    proc = subprocess.run(
+        ["ffmpeg", "-i", str(path)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+    )
+    return bool(_AUDIO_STREAM_RE.search((proc.stderr or b"").decode("utf-8", errors="replace")))
 
 
 def _probe_duration_seconds(path: Path) -> float | None:
