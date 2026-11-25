@@ -134,6 +134,9 @@ class VideoHybridSegment(Capability):
                     })
                     last_frame_bytes = _extract_last_frame_jpeg(clip, work / f"beat{i+1}_last.jpg")
                 elif beat.kind == "infographic":
+                    # "infographic" = static Nano Banana slide + ffmpeg
+                    # Ken Burns zoom. Cheap and fast. Lacks element-level
+                    # motion; best for low-stakes or short beats.
                     clip, image_usage = self._generate_infographic_beat(
                         beat=beat,
                         model=image_model,
@@ -147,10 +150,36 @@ class VideoHybridSegment(Capability):
                         "model": image_model,
                         "usage": image_usage,
                     })
-                    # Last-frame continuity doesn't carry across an
-                    # infographic beat -- the next veo beat should start
-                    # fresh unless caller explicitly chains from an
-                    # earlier veo clip (future enhancement).
+                    last_frame_bytes = None
+                elif beat.kind == "infographic_animated":
+                    # "infographic_animated" = Nano Banana slide, looped as
+                    # short video, then Omni edit animates the elements
+                    # (live-verified 2026-11-25: elements slide, labels
+                    # emerge in colour, style preserved -- real motion-
+                    # graphics narrative, not zoom). Caps at 10 seconds
+                    # per call (Omni edit input cap); longer beats need
+                    # chaining, which the caller handles by sequencing
+                    # multiple "infographic_animated" beats.
+                    omni_model = (payload.params or {}).get("omni_model") or self._settings.get("omni_model", "gemini-omni-1.1-flash-preview")
+                    clip, image_usage = self._generate_animated_infographic_beat(
+                        beat=beat,
+                        image_model=image_model,
+                        omni_model=omni_model,
+                        width=width,
+                        height=height,
+                        work=work,
+                        index=i + 1,
+                    )
+                    calls.append({
+                        "label": f"beat{i+1}_infographic_slide",
+                        "model": image_model,
+                        "usage": image_usage,
+                    })
+                    calls.append({
+                        "label": f"beat{i+1}_infographic_anim",
+                        "model": omni_model,
+                        "usage": None,
+                    })
                     last_frame_bytes = None
                 else:
                     raise ValueError(f"Unknown beat kind: {beat.kind!r}")
@@ -303,6 +332,95 @@ class VideoHybridSegment(Capability):
                 f"Infographic ffmpeg animation failed (exit {proc.returncode}). "
                 f"Last stderr:\n{stderr_tail}"
             )
+        return clip_path, image_result.usage
+
+    def _generate_animated_infographic_beat(
+        self, *, beat: Beat, image_model: str, omni_model: str,
+        width: int, height: int, work: Path, index: int,
+    ) -> tuple[Path, Any]:
+        """Two-stage: Nano Banana renders the crisp base slide, Omni edit
+        animates the elements. Preserves Nano Banana's text/geometry
+        quality (Veo can't) while adding real element-level motion
+        (Ken Burns can't). Beat duration is clamped to Omni's 10-second
+        input/output cap -- callers wanting longer sequences chain
+        multiple beats.
+
+        Beat prompt is a two-section string split by '::ANIMATE::' --
+        everything before is the Nano Banana slide prompt, everything
+        after is the Omni edit animation instruction. This keeps a
+        single prompt field per beat while letting the author write
+        both halves cleanly.
+        """
+        if "::ANIMATE::" not in beat.prompt:
+            raise VideoHybridSegmentError(
+                "infographic_animated beat requires beat.prompt to contain "
+                "'::ANIMATE::' separating the slide prompt from the "
+                "animation instruction. Got: " + beat.prompt[:120]
+            )
+        slide_prompt, _, animate_instruction = beat.prompt.partition("::ANIMATE::")
+        slide_prompt = slide_prompt.strip()
+        animate_instruction = animate_instruction.strip()
+
+        duration = min(int(beat.duration_seconds), 10)  # Omni edit hard cap
+        if duration != beat.duration_seconds:
+            logger.warning(
+                "infographic_animated beat %d: clamping duration %ds -> %ds "
+                "(Omni edit input cap)",
+                index, beat.duration_seconds, duration,
+            )
+
+        # Stage 1: Nano Banana generates the base slide
+        try:
+            image_result = self.client.generate_image(
+                model=image_model,
+                prompt=slide_prompt,
+                resolution=self._settings.get("image_resolution", "2K"),
+                output_mime_type="image/png",
+            )
+        except GeminiCallError as exc:
+            raise VideoHybridSegmentError(f"Infographic base slide generation failed: {exc}") from exc
+        if not image_result.image_bytes:
+            raise VideoHybridSegmentError(
+                "Infographic base slide returned no bytes -- likely blocked by a safety "
+                f"filter. Model said: {(image_result.text or '(no detail)').strip()[:300]}"
+            )
+        slide_path = work / f"beat{index}_slide.png"
+        slide_path.write_bytes(image_result.image_bytes)
+
+        # Stage 2: loop the slide as a short video for Omni edit input
+        loop_path = work / f"beat{index}_loop.mp4"
+        cmd = [
+            "ffmpeg", "-y", "-loop", "1", "-i", str(slide_path),
+            "-vf",
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:white,fps=24",
+            "-t", str(duration),
+            "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+            "-pix_fmt", "yuv420p", str(loop_path),
+        ]
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        if proc.returncode != 0:
+            stderr_tail = (proc.stderr or b"").decode("utf-8", errors="replace")[-800:]
+            raise VideoHybridSegmentError(
+                f"Infographic slide-loop ffmpeg failed (exit {proc.returncode}): {stderr_tail}"
+            )
+
+        # Stage 3: Omni edit animates the elements
+        try:
+            omni_result = self.client.interactions_video(
+                model=omni_model,
+                task="edit",
+                video_bytes=loop_path.read_bytes(),
+                video_mime_type="video/mp4",
+                instruction=animate_instruction,
+            )
+        except GeminiCallError as exc:
+            raise VideoHybridSegmentError(f"Infographic Omni-edit animation failed: {exc}") from exc
+        if not omni_result.video_bytes:
+            raise VideoHybridSegmentError("Omni edit returned no video bytes for infographic beat.")
+
+        clip_path = output_path(".mp4", f"{self.name}_infographic_anim")
+        clip_path.write_bytes(omni_result.video_bytes)
         return clip_path, image_result.usage
 
     def _generate_narration(

@@ -765,6 +765,13 @@ capabilities:
     resolution: "720p"
     image_model: gemini-3.1-flash-image
     image_resolution: "2K"
+    # Optional: Gemini Omni for animated infographic beats
+    # (kind="infographic_animated"). Live-verified 2026-11-25 that Omni
+    # edit preserves Nano Banana's crisp text + geometry while adding
+    # real element-level motion (options sliding into funnels, cards
+    # emerging in color -- genuine motion graphics, not Ken Burns zoom).
+    # Capped at 10-second input/output per call.
+    omni_model: gemini-omni-1.1-flash-preview
     tts_model: gemini-2.5-flash-preview-tts
     tts_voice: Kore
     poll_interval_seconds: 10
