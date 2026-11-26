@@ -17,6 +17,28 @@ first fix, what's live-verified vs. merely documented, and the design for
 the long-form video work that's next. This file (`CLAUDE.md`) only
 summarizes it.
 
+**For the long-form lesson work specifically** (the "Selection Criterion"
+TCS iON concept video and everything that built off it), the two
+Selection Criterion docs are the authoritative handoff:
+
+- `docs/SELECTION_CRITERION_PIPELINE_DEEP_DIVE.md` — the engineering
+  reference: pipeline architecture, step-by-step mechanics, timing and
+  cost measurements for BOTH runs (hybrid and Omni-only), scaling
+  projections, recommendations. Read this when you're doing engine work
+  on long-form lessons.
+- `docs/SELECTION_CRITERION_RUN_METADATA.md` — the stakeholder-facing
+  summary of the same work (shorter, less code-oriented). Share with
+  non-engineering readers.
+
+**Important pipeline change as of 2026-11-25:** Long-form lessons pivoted
+from the hybrid (Veo + Nano Banana + Omni) pipeline to Omni-only (Nano
+Banana + `gemini-omni-1.2-flash` GA + TTS), ~33% cheaper and single-video-
+model. Veo is no longer called by any live lesson-generation path in
+this repo, though the `veo` beat kind and the Veo capabilities are still
+present for backward compatibility and for anything else that wants
+realistic cinematic footage. See the deep-dive doc §5 and §6 for the
+numbers.
+
 ---
 
 ## 1. What this app actually is
@@ -102,6 +124,37 @@ docs/
                              every bug found and fixed, and the design for
                              what's next. Read this, not just this file,
                              before doing video work.
+  SELECTION_CRITERION_PIPELINE_DEEP_DIVE.md
+                             Engineering reference for the long-form
+                             lesson pipeline (TCS iON "Selection
+                             Criterion" video, 2026-11-25): architecture,
+                             step-by-step mechanics, measured timing +
+                             cost for both the hybrid run ($35.81) and
+                             the Omni-only rebuild ($24.05), scaling
+                             projections, and the recommendation to use
+                             Omni-only going forward.
+  SELECTION_CRITERION_RUN_METADATA.md
+                             Stakeholder-facing summary of the same
+                             work. Shorter, less code-oriented -- for
+                             sharing with non-engineering readers.
+
+scripts/
+  full_lesson/                 The Selection Criterion long-form lesson
+                             pipeline (lives here rather than iav/ because
+                             the segment plans are content, not generic
+                             capability code -- iav/capabilities/video_
+                             hybrid_segment.py is the generic building
+                             block it drives).
+    run_all.py                 Orchestrator: runs all 11 segments then
+                             assembles the final lesson.
+    _shared.py                 Shared style prompts + the omni_real() /
+                             infog() / veo() beat helpers.
+    segment_NN_*.py            One file per segment: title + beats +
+                             narration_script.
+    segment_01_omni_only.py    Standalone test: segment 1 regenerated
+                             with pure Omni (no Nano Banana). Kept as
+                             reference for why Nano Banana can't be
+                             dropped -- see the deep-dive doc.
 
 .credentials/                 Gitignored. Service account JSON goes here.
 .env                           Gitignored. See Section 6.
@@ -124,7 +177,9 @@ docs/
 | Combine Clips | `video_combine.py` | Several clips → one longer file (ffmpeg) | Working. Only reachable via `video_studio.py` |
 | Video → Questions | `video_to_questions.py` | Video → structured comprehension questions | Working, **hidden** in `app.py` (`SHOW_VIDEO_TRANSFORM_TABS=False`); active in `video_studio.py` |
 | Video → Professional | `video_enhance.py` | SME recording → stabilised/captioned/denoised MP4 (ffmpeg + Gemini transcription) | Working, **hidden** in `app.py`; active in `video_studio.py` |
-| Long-form Video | *not built yet* | Topic + target duration → full multi-scene video, generated and stitched automatically | **Designed, not built** — see `docs/VIDEO_CAPABILITIES.md` §Long-Form Video |
+| Long-form hybrid segment | `video_hybrid_segment.py` | One educational-video segment composed from realistic, static-infographic, animated-infographic beats + narration | Working. Driven by `scripts/full_lesson/` for the Selection Criterion lesson |
+| Full lesson (Selection Criterion) | `scripts/full_lesson/run_all.py` | 11-segment lesson: segment plans → per-segment hybrid-segment capability → ffmpeg final assembly | **Built and shipped twice** (2026-11-25) — see `docs/SELECTION_CRITERION_PIPELINE_DEEP_DIVE.md` |
+| Topic → full video utility | *not built yet* | Topic + target duration → LLM-written segment plans → full video | **Designed, not built** — planned extension of the Selection Criterion pipeline |
 
 "Working" means live-tested against the real Vertex AI project this POC
 runs on, not just read for correctness — every capability above has been
@@ -231,25 +286,31 @@ the other way around.
 
 ## 8. Open items / known gaps
 
-- Gemini Omni's prompt-to-video path (text-to-video) is tested and works,
-  but isn't wired into any capability — only its edit/extend modes are
-  (`video_edit.py`). Veo already serves prompt-to-video, so this was
-  scoped out, not forgotten.
+- Gemini Omni's prompt-to-video path (text-to-video) is now **wired
+  into `video_hybrid_segment.py`** via the `omni_realistic` beat kind
+  (2026-11-25 pivot) — this was previously an open item.
 - `gemini-2.5-pro` works for `video_to_questions` (live-verified) but
   isn't in that capability's `available_models` list in `config.yaml` yet
   — a one-line config addition, not a code change.
-- Gemini Omni is reachable **only** via the preview-named model
-  (`gemini-omni-1.1-flash-preview`) on this project — the GA name
-  (`gemini-omni-1.1-flash`, no suffix) is rejected outright. That preview
-  model's own documented shutdown date has already passed; it's still
-  responding, but could stop without warning. Re-check the GA name
-  periodically before relying on this for anything production-facing.
+- **Omni GA now reachable** on this project. As of 2026-11-25, the
+  pipeline uses `gemini-omni-1.2-flash` GA (probe-verified + 34 live
+  calls across Run B of the Selection Criterion lesson). The older
+  `gemini-omni-1.1-flash-preview` whose shutdown date had passed is no
+  longer the default, though it's kept in `available_omni_models` for
+  rollback. The `gemini-omni-1.1-flash` GA name (no suffix) was still
+  rejected last time it was tried — hasn't been re-checked since 1.2
+  came online; no immediate need to.
 - Veo Extend has been observed to reject a specific prior clip outright,
   for reasons not surfaced by the API, on at least one real clip during
   testing — confirmed not a region issue (the same clip worked in another
   region). Not a bug in this codebase; the error is surfaced cleanly, not
   silently swallowed, but worth knowing it can happen in a live demo.
-- Long-form video (topic → full video) is designed but not built — see
-  `docs/VIDEO_CAPABILITIES.md` for the approach (frame-chaining between
-  scenes, live-verified) and the real cost/time math before committing to
-  building it.
+- **Hand-authored long-form lesson is built** — the Selection Criterion
+  lesson (11 segments, ~6 min) ships end-to-end via
+  `scripts/full_lesson/run_all.py` and was produced twice (hybrid +
+  Omni-only); see `docs/SELECTION_CRITERION_PIPELINE_DEEP_DIVE.md` for
+  the measured numbers. The remaining open item is the generic
+  **topic → full video utility**: give it a topic and a target
+  duration, and have an LLM write the segment plans that the existing
+  pipeline then renders. Designed in `docs/VIDEO_CAPABILITIES.md`,
+  not built.
