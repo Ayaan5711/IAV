@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 # Defaults -- tune these in one place and all segments using this
 # runner move together.
 DEFAULT_IMAGE_MODEL = "gemini-3-pro-image"        # Nano Banana Pro
+DEFAULT_OMNI_MODEL = "gemini-omni-1.2-flash"      # Omni 1.2 Flash GA
 DEFAULT_TTS_MODEL = "gemini-2.5-flash-preview-tts"
 DEFAULT_TTS_VOICE = "Kore"
 DEFAULT_RESOLUTION = {"720p": (1280, 720), "1080p": (1920, 1080)}
@@ -59,11 +60,20 @@ IMAGE_RESOLUTION_FOR = {"720p": "2K", "1080p": "2K", "4K": "4K"}
 
 @dataclass
 class SubShot:
-    """One sub-shot: one slide + one sentence of narration."""
-    slide: str                   # full slide description for NB Pro
+    """One sub-shot: slide/video + one sentence of narration.
+
+    kind:
+      "infographic"     — Nano Banana Pro slide + Ken Burns zoom. If
+                          is_beat_start, a fresh generation; otherwise
+                          an edit_image chain on the previous slide.
+      "omni_realistic"  — Gemini Omni 1.2 Flash text_to_video. Always
+                          a beat on its own (no edit chain). Fixed 10s.
+    """
+    slide: str                   # for infographic: slide prompt; for omni_realistic: text_to_video prompt
     narration: str               # one sentence for TTS
     is_beat_start: bool = False  # true = fresh NB Pro gen; false = edit_image on previous
-    edit_instruction: Optional[str] = None  # used when is_beat_start=False; if None, uses `slide`
+    edit_instruction: Optional[str] = None  # used when kind=infographic, is_beat_start=False
+    kind: str = "infographic"    # "infographic" | "omni_realistic"
 
 
 @dataclass
@@ -128,26 +138,86 @@ def _generate_narration(client: GeminiClient, line: str, out_wav: Path,
     _pcm_to_wav(result.audio_bytes, out_wav)
 
 
+def _generate_omni_video(client: GeminiClient, prompt: str, out_mp4: Path,
+                         omni_model: str) -> None:
+    """Omni text_to_video. Fixed 10s output at 720p default."""
+    result = client.interactions_video(
+        model=omni_model,
+        instruction=prompt,
+        task="text_to_video",
+    )
+    if not result.video_bytes:
+        raise RuntimeError("Omni text_to_video returned no bytes")
+    out_mp4.write_bytes(result.video_bytes)
+
+
 def _make_subshot(slide_png: Path, narr_wav: Path, out_mp4: Path,
                   width: int, height: int) -> float:
+    """Build one sub-shot MP4 with subtle Ken Burns zoom for life."""
     narr_sec = _probe_duration(narr_wav)
     total = LEAD_IN + narr_sec + TAIL
+    total_frames = int(total * FPS)
+
+    # Ken Burns: slow zoom from 1.0 -> 1.05 over the sub-shot.
+    # zoompan expects the input to be high-res; scale slightly larger
+    # first so the zoom doesn't degrade resolution. z gets evaluated
+    # per output frame, 'on' is the output frame index, 'd' is total.
+    zoom_start = 1.0
+    zoom_end = 1.05
+    upscale = 2  # scale input 2x before zoompan so output stays sharp
+
+    vfilter = (
+        f"scale={width*upscale}:{height*upscale},setsar=1:1,"
+        f"zoompan=z='{zoom_start}+({zoom_end}-{zoom_start})*on/{max(total_frames-1,1)}':"
+        f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+        f"d={total_frames}:s={width}x{height}:fps={FPS}"
+    )
 
     _run_ffmpeg([
         "ffmpeg", "-y",
         "-loop", "1", "-i", str(slide_png),
         "-i", str(narr_wav),
         "-filter_complex",
-        f"[0:v]scale={width}:{height},setsar=1:1[v];"
+        f"[0:v]{vfilter}[v];"
         f"[1:a]adelay={int(LEAD_IN*1000)}|{int(LEAD_IN*1000)},apad=pad_dur={TAIL}[a]",
         "-map", "[v]", "-map", "[a]",
         "-t", f"{total:.3f}",
         "-r", str(FPS),
         "-c:v", "libx264", "-preset", "medium", "-crf", "20",
-        "-pix_fmt", "yuv420p", "-tune", "stillimage",
+        "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart", str(out_mp4),
     ], step="make_subshot")
+
+    return _probe_duration(out_mp4)
+
+
+def _make_omni_subshot(omni_mp4: Path, narr_wav: Path, out_mp4: Path,
+                       width: int, height: int) -> float:
+    """Build an omni_realistic sub-shot: Omni's 10s video (audio
+    stripped) + narration audio with LEAD_IN padding + TAIL padding.
+    If narration exceeds 10s, extend video with last-frame hold."""
+    narr_sec = _probe_duration(narr_wav)
+    omni_sec = _probe_duration(omni_mp4)
+    target = max(omni_sec, LEAD_IN + narr_sec + TAIL)
+    v_extend = max(0.0, target - omni_sec)
+
+    _run_ffmpeg([
+        "ffmpeg", "-y",
+        "-i", str(omni_mp4),
+        "-i", str(narr_wav),
+        "-filter_complex",
+        # scale and extend video; strip Omni audio by not mapping its audio
+        f"[0:v]scale={width}:{height},setsar=1:1,tpad=stop_mode=clone:stop_duration={v_extend:.3f}[v];"
+        f"[1:a]adelay={int(LEAD_IN*1000)}|{int(LEAD_IN*1000)},apad=pad_dur={TAIL}[a]",
+        "-map", "[v]", "-map", "[a]",
+        "-t", f"{target:.3f}",
+        "-r", str(FPS),
+        "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart", str(out_mp4),
+    ], step="make_omni_subshot")
 
     return _probe_duration(out_mp4)
 
@@ -229,6 +299,7 @@ def run_segment(plan: SegmentPlanV2, *, resolution: str = "720p",
                 client: Optional[GeminiClient] = None,
                 config: Optional[Config] = None,
                 image_model: str = DEFAULT_IMAGE_MODEL,
+                omni_model: str = DEFAULT_OMNI_MODEL,
                 tts_model: str = DEFAULT_TTS_MODEL,
                 tts_voice: str = DEFAULT_TTS_VOICE) -> Path:
     """Build one segment under the T1d pattern. Returns the final MP4 path."""
@@ -248,24 +319,39 @@ def run_segment(plan: SegmentPlanV2, *, resolution: str = "720p",
 
     t0 = time.perf_counter()
 
-    # --- step 1: generate every slide (edit chain within a beat) ---
-    slide_paths: list[Path] = []
+    # --- step 1: materialise the base media per sub-shot ---
+    # For infographic kind: generate slide image (fresh or edit-chain).
+    # For omni_realistic kind: generate 10s Omni text_to_video.
+    slide_paths: list[Optional[Path]] = []    # None where kind=omni_realistic
+    omni_paths: list[Optional[Path]] = []     # None where kind=infographic
     prev_slide: Optional[Path] = None
     for i, s in enumerate(plan.sub_shots, start=1):
-        slide_png = workdir / f"slide_{i:02d}.png"
-        if s.is_beat_start:
-            logger.info("[%s @ %s] sub-shot %d/%d: slide FRESH (beat start)",
+        if s.kind == "infographic":
+            slide_png = workdir / f"slide_{i:02d}.png"
+            if s.is_beat_start:
+                logger.info("[%s @ %s] sub-shot %d/%d: infographic FRESH (beat start)",
+                            plan.output_name, resolution, i, len(plan.sub_shots))
+                _generate_slide(client, s.slide, None, slide_png,
+                                image_model, image_resolution, style_base)
+            else:
+                instruction = s.edit_instruction or s.slide
+                logger.info("[%s @ %s] sub-shot %d/%d: infographic EDIT-chain",
+                            plan.output_name, resolution, i, len(plan.sub_shots))
+                _generate_slide(client, instruction, prev_slide, slide_png,
+                                image_model, image_resolution, style_base)
+            slide_paths.append(slide_png)
+            omni_paths.append(None)
+            prev_slide = slide_png
+        elif s.kind == "omni_realistic":
+            omni_mp4 = workdir / f"omni_{i:02d}.mp4"
+            logger.info("[%s @ %s] sub-shot %d/%d: omni text_to_video",
                         plan.output_name, resolution, i, len(plan.sub_shots))
-            _generate_slide(client, s.slide, None, slide_png,
-                            image_model, image_resolution, style_base)
+            _generate_omni_video(client, s.slide, omni_mp4, omni_model)
+            slide_paths.append(None)
+            omni_paths.append(omni_mp4)
+            prev_slide = None  # reset edit chain: can't edit-chain across an omni beat
         else:
-            instruction = s.edit_instruction or s.slide
-            logger.info("[%s @ %s] sub-shot %d/%d: slide EDIT-chain",
-                        plan.output_name, resolution, i, len(plan.sub_shots))
-            _generate_slide(client, instruction, prev_slide, slide_png,
-                            image_model, image_resolution, style_base)
-        slide_paths.append(slide_png)
-        prev_slide = slide_png
+            raise ValueError(f"Unknown sub-shot kind: {s.kind!r}")
 
     # --- step 2: TTS every sub-shot's narration ---
     narr_paths: list[Path] = []
@@ -279,24 +365,32 @@ def run_segment(plan: SegmentPlanV2, *, resolution: str = "720p",
     # --- step 3: build sub-shot mp4s ---
     subshot_paths: list[Path] = []
     durations: list[float] = []
-    for i, (slide_png, narr_wav) in enumerate(zip(slide_paths, narr_paths), start=1):
+    for i, (s, slide_png, omni_mp4, narr_wav) in enumerate(
+        zip(plan.sub_shots, slide_paths, omni_paths, narr_paths), start=1
+    ):
         subshot_mp4 = workdir / f"sub_{i:02d}.mp4"
-        dur = _make_subshot(slide_png, narr_wav, subshot_mp4, width, height)
-        logger.info("[%s @ %s] sub-shot %d/%d: dur=%.2fs",
-                    plan.output_name, resolution, i, len(plan.sub_shots), dur)
+        if s.kind == "infographic":
+            dur = _make_subshot(slide_png, narr_wav, subshot_mp4, width, height)
+        else:  # omni_realistic
+            dur = _make_omni_subshot(omni_mp4, narr_wav, subshot_mp4, width, height)
+        logger.info("[%s @ %s] sub-shot %d/%d: kind=%s dur=%.2fs",
+                    plan.output_name, resolution, i, len(plan.sub_shots), s.kind, dur)
         subshot_paths.append(subshot_mp4)
         durations.append(dur)
 
-    # --- step 4: group into beats (consecutive is_beat_start=False
-    # sub-shots belong to the beat started by the previous is_beat_start=True)
+    # --- step 4: group into beats. A beat is a run of consecutive
+    # sub-shots that share an edit chain -- i.e. a fresh infographic
+    # beat-start followed by its edits. An omni_realistic sub-shot is
+    # always its own beat.
     beats: list[list[int]] = []
     for idx, s in enumerate(plan.sub_shots):
-        if s.is_beat_start:
+        if s.is_beat_start or s.kind == "omni_realistic":
             beats.append([idx])
         else:
             beats[-1].append(idx)
 
-    # --- step 5: concat each beat's sub-shots with visual xfade ---
+    # --- step 5: concat each beat's sub-shots with visual xfade (or
+    # just copy if a beat has a single sub-shot, e.g. omni_realistic) ---
     beat_mp4s: list[Path] = []
     for b_idx, beat_indices in enumerate(beats, start=1):
         beat_group_paths = [subshot_paths[i] for i in beat_indices]
