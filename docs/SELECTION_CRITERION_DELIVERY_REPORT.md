@@ -55,17 +55,17 @@ The lesson is organized into 11 content segments that follow a
 pedagogical arc appropriate for an examination-context concept
 video:
 
-1. Opening and motivation.
-2. Definition of selection criteria in everyday context.
-3. Worked example: choosing between two consumer options.
-4. Multiple-dimension weighing.
-5. Explicit versus implicit criteria.
-6. Trade-offs and prioritization.
-7. Stakeholder considerations.
-8. Life-level decisions and reversibility.
-9. Common decision-making mistakes.
-10. Post-decision measurement and review.
-11. Closing summary and reinforcement.
+1. Selection in everyday life.
+2. Goal, option, criterion.
+3. Need and constraints.
+4. Essential and desirable criteria.
+5. Hard and soft criteria.
+6. Priorities and trade-offs.
+7. A structured selection process.
+8. Life crossroads (big decisions).
+9. Common decision mistakes.
+10. Post-selection metrics.
+11. Recap: choose, measure, improve.
 
 ### 1.5 Models and Services Used
 
@@ -76,8 +76,8 @@ of the lesson was produced by a model other than those named here.
 | Model Identifier | Vendor | Role in Pipeline | Calls per Lesson |
 |---|---|---|---|
 | `gemini-omni-1.2-flash` (edit mode) | Google Vertex AI | Element-level animation of each sub-shot | 56 |
-| `gemini-omni-1.2-flash` (text-to-video mode) | Google Vertex AI | Cinematic realistic beats | 6 |
-| `gemini-3-pro-image` (Nano Banana Pro) | Google Vertex AI | On-screen infographic rendering (titles, labels, data) | Approximately 87 |
+| `gemini-omni-1.2-flash` (text-to-video mode) | Google Vertex AI | Cinematic realistic beats | 5 |
+| `gemini-3-pro-image` (Nano Banana Pro) | Google Vertex AI | On-screen infographic rendering (titles, labels, data). 31 fresh beat-start slides + 56 edited "after-state" slides + 5 "keep exactly" edits that maintain chain continuity under static holds. | 92 |
 | `gemini-2.5-flash-preview-tts` (voice: "Kore") | Google Vertex AI | Narration audio generation | 97 |
 
 All model calls were made against the project's own Vertex AI
@@ -88,18 +88,28 @@ the production.
 
 Costs below were computed from the measured call counts above
 against Google's published Vertex AI rates, verified on 2026-11-25.
-INR figures use the prevailing exchange rate of ₹84 per USD on the
-report date.
+INR figures use the prevailing exchange rate of ₹92 per USD.
+
+**Note on Omni billing.** Gemini Omni is billed per 10-second video
+clip returned, regardless of how much of each clip is used in the
+final cut. The 56 element-animation calls and 5 realistic calls
+produce a combined **610 seconds of billed Omni output**. The
+pipeline trims each edit clip to the length of its sentence of
+narration (typically 3–8 seconds), so approximately 330 seconds of
+the billed output appears in the finished lesson. The remaining
+~220 seconds of the 9-minute lesson is composed of Nano Banana Pro
+slides shown with fade-in or held static — these carry no Omni cost
+at all. All figures below reflect what is actually billed.
 
 **Standard resolution (720 p):**
 
 | Line Item | Quantity | Unit Rate | Amount (USD) | Amount (INR) |
 |---|---:|---|---:|---:|
-| Omni video — element animation (billed in 10-second clips) | 560 s | USD 0.07 / s | 39.20 | ₹3,293 |
-| Omni video — realistic beats | 60 s | USD 0.07 / s | 4.20 | ₹353 |
-| Nano Banana Pro images | 87 | ~USD 0.14 each | 12.20 | ₹1,025 |
-| Gemini TTS narration | Approx. 1,455 s | USD 0.0015 / s | 2.20 | ₹185 |
-| **Total per lesson** | | | **~57.80** | **~₹4,856** |
+| Omni video — element animation | 56 calls × 10 s = 560 s | USD 0.07 / s | 39.20 | ₹3,606 |
+| Omni video — realistic beats | 5 calls × 10 s = 50 s | USD 0.07 / s | 3.50 | ₹322 |
+| Nano Banana Pro images | 92 images (~1,120 image-out tokens each) | USD 120 / 1M image-out tokens | ~12.40 | ~₹1,141 |
+| Gemini TTS narration | 97 calls (~12,500 audio-out tokens) | USD 10 / 1M audio-out tokens | ~0.13 | ~₹12 |
+| **Total per lesson** | | | **~55.25** | **~₹5,083** |
 
 **High resolution (1080 p):**
 
@@ -109,18 +119,18 @@ billing rate approximately doubles at 1080 p output.
 
 | Line Item | Quantity | Unit Rate | Amount (USD) | Amount (INR) |
 |---|---:|---|---:|---:|
-| Omni video — element animation | 560 s | USD 0.15 / s | 84.00 | ₹7,056 |
-| Omni video — realistic beats | 60 s | USD 0.15 / s | 9.00 | ₹756 |
-| Nano Banana Pro images | 87 | ~USD 0.14 each | 12.20 | ₹1,025 |
-| Gemini TTS narration | Approx. 1,455 s | USD 0.0015 / s | 2.20 | ₹185 |
-| **Total per lesson** | | | **~107.40** | **~₹9,022** |
+| Omni video — element animation | 560 s | USD 0.15 / s | 84.00 | ₹7,728 |
+| Omni video — realistic beats | 50 s | USD 0.15 / s | 7.50 | ₹690 |
+| Nano Banana Pro images | 92 images | USD 120 / 1M image-out tokens | ~12.40 | ~₹1,141 |
+| Gemini TTS narration | 97 calls | USD 10 / 1M audio-out tokens | ~0.13 | ~₹12 |
+| **Total per lesson** | | | **~104.03** | **~₹9,571** |
 
 **Normalized cost (per minute of finished lesson):**
 
 | Resolution | USD per minute | INR per minute |
 |---|---:|---:|
-| 720 p | ~6.30 | ~₹530 |
-| 1080 p | ~11.70 | ~₹980 |
+| 720 p | ~6.00 | ~₹554 |
+| 1080 p | ~11.35 | ~₹1,044 |
 
 ### 1.7 Production Time
 
@@ -298,9 +308,12 @@ returned.
 Where the narration continues across a sub-shot without any visual
 change (for example, a concluding sentence under a slide that is
 already on screen), the sub-shot is realized by holding the
-previous frame for the sub-shot's padded audio duration. No API
-call is made to the image model or the video model. Across the
-delivered lesson, 5 of the 97 sub-shots were static holds.
+previous frame for the sub-shot's padded audio duration. No call
+to Gemini Omni is made; a short pass-through call to Nano Banana
+Pro with a "keep exactly as is" instruction maintains the slide
+chain's reference frame for any subsequent intra-beat edit.
+Across the delivered lesson, 5 of the 97 sub-shots were static
+holds.
 
 ### 2.7 Assembly and Verification
 
@@ -340,7 +353,14 @@ characteristics for each segment at both resolutions.
 | 9 | 55.1 s | 9 min 12 s | 2.16 MB | 10 min 09 s | 3.25 MB |
 | 10 | 57.1 s | 8 min 54 s | 2.33 MB | 9 min 58 s | 4.20 MB |
 | 11 | 38.3 s | 10 min 37 s | 1.51 MB | 12 min 01 s | 2.37 MB |
-| **Totals** | **9 min 10 s** | **94 min 24 s** | **30.5 MB** | **104 min 38 s** | **54.7 MB** |
+| **Final concatenated lesson** | **9 min 10 s** | **94 min 25 s** | **30.5 MB** | **104 min 39 s** | **54.7 MB** |
+
+The final file-size figures above are smaller than the arithmetic
+sum of the segment file sizes (32.0 MB at 720 p and 57.3 MB at
+1080 p). This is expected: ffmpeg's stream-copy concatenation
+removes the duplicated MP4 container headers that each per-segment
+file carries, producing a single file smaller than the sum of its
+inputs.
 
 ### 2.9 Operational Commands
 
