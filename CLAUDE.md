@@ -29,6 +29,16 @@ Selection Criterion docs are the authoritative handoff:
 - `docs/SELECTION_CRITERION_RUN_METADATA.md` — the stakeholder-facing
   summary of the same work (shorter, less code-oriented). Share with
   non-engineering readers.
+- `docs/RUN_C_OBSERVATIONS.md` — the engineering log for the **third**
+  run (T1d pattern: per-sub-shot Omni animation + Nano Banana Pro
+  slides, 2026-11-27). Explains the three defects senior flagged in
+  Run B, the five iteration rounds (T1→T1d) that led to the proven
+  pattern, measured numbers for Run C at 720p (and 1080p when it
+  lands), and what did NOT work (worth not re-trying).
+- `docs/FOR_BUSINESS_REVIEW.md` — plain-language version of the Run C
+  story for non-engineering reviewers: cost per lesson in USD and
+  INR, per-minute pricing for both resolutions, turnaround time, and
+  the three fixes in a one-line-each table.
 
 **Important pipeline change as of 2026-11-25:** Long-form lessons pivoted
 from the hybrid (Veo + Nano Banana + Omni) pipeline to Omni-only (Nano
