@@ -244,12 +244,84 @@ That's intentional for exam content; a 6-min lesson felt rushed.
 
 ---
 
-## 6. What's next
+## 6. Run C measurements (1080p pass)
 
-1. **1080p pass (in progress at time of writing).** Same pattern,
-   `--resolution 1080p`. Omni billed at $0.15/s instead of $0.07/s,
-   so the Omni lines will roughly double. Slides are regenerated at
-   1920x1080 target. Expected cost ~$95.
+Primary rendered artifact:
+`/home/user/IAV/storage/outputs/t1d_lesson_1080p-20261127T063431Z-e5306219.mp4`
+
+| Metric | Value |
+|---|---|
+| Final duration | 9:11.60 (551.60 s) |
+| File size | 57,318,525 bytes (54.7 MB) |
+| Final assembly method | ffmpeg stream-copy concat (no re-encode) |
+| Segments | 11 / 11 OK, 0 failed |
+| End-to-end wall-clock | 6,278.8 s (104.6 min) |
+| Resolution | 1920 x 1080 |
+
+### Per-segment wall-clock (1080p)
+
+| Segment | Seconds | 720p seconds | 1080p/720p ratio |
+|---|---:|---:|---:|
+| seg01 | 375 | 361 | 1.04 |
+| seg02 | 672 | 615 | 1.09 |
+| seg03 | 537 | 511 | 1.05 |
+| seg04 | 543 | 485 | 1.12 |
+| seg05 | 551 | 445 | 1.24 |
+| seg06 | 471 | 438 | 1.08 |
+| seg07 | 727 | 656 | 1.11 |
+| seg08 | 469 | 428 | 1.10 |
+| seg09 | 609 | 552 | 1.10 |
+| seg10 | 598 | 534 | 1.12 |
+| seg11 | 721 | 637 | 1.13 |
+
+Average per-segment wall-clock: **571 s (~9.5 min)**, ~11% longer
+than 720p.
+
+### Approximate cost (1080p)
+
+Same API-call counts as the 720p run (same plans, same sub-shots).
+Only Omni's billing rate changes: $0.15/s at 1080p vs $0.07/s at
+720p. Nano Banana Pro slides are rendered at target pixel size but
+billed as image tokens -- no large price swing.
+
+| Line item | Qty | Rate | Approx USD |
+|---|---:|---|---:|
+| Omni edit (56 x 10 s billed) | 560 s | $0.15/s | $84.00 |
+| Omni text-to-video (6 x 10 s) | 60 s | $0.15/s | $9.00 |
+| Nano Banana Pro images | ~87 | ~$0.14 ea | ~$12.20 |
+| TTS | 97 x ~15 s avg | $0.0015/s | ~$2.20 |
+| **Total (1080p, Run C)** | | | **~$107.40** |
+
+### Sanity checks that passed
+
+- Every 1080p segment MP4 opened in ffprobe at 1920x1080.
+- Final concat was stream-copy (no re-encode), proof the per-segment
+  timebases matched -- no 720p/1080p mix contamination.
+- Audio alignment identical to 720p (same TTS clips, same timing).
+- Duration is 1.48 s longer than 720p (9:11.60 vs 9:10.12). Expected
+  -- slight per-segment rounding in ffmpeg concat. No content drift.
+
+### 720p vs 1080p side-by-side
+
+| Dimension | 720p | 1080p |
+|---|---|---|
+| Final duration | 9:10.12 | 9:11.60 |
+| File size | 30.5 MB | 54.7 MB |
+| End-to-end wall-clock | 94.4 min | 104.6 min |
+| Approximate cost | ~$57.80 | ~$107.40 |
+| Omni per-second rate | $0.07 | $0.15 |
+
+**Cost delta to go 1080p:** ~$49.60 / ~₹4,160 for one 9-min lesson.
+**Wall-clock delta:** ~10 min end-to-end.
+
+---
+
+## 7. What's next
+
+1. **Both resolutions shipped.** 720p and 1080p MP4s plus per-segment
+   MP4s are in `storage/outputs/` and were packaged into
+   `selection_criterion_720p.zip` and `selection_criterion_1080p.zip`
+   for stakeholder review.
 
 2. **The topic -> full-video utility (still unbuilt).** With T1d
    locked in as the proven pattern and both resolutions rendered,

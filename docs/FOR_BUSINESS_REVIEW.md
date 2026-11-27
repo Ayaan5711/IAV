@@ -164,10 +164,11 @@ plus authoring time.
 
 - **Final lesson MP4 (720p, 9:10, 30.5 MB):** rendered today, sent
   separately.
-- **Final lesson MP4 (1080p, 9:10, larger):** rendering at time of
-  writing; will be sent on completion.
-- **Per-segment MP4s (both resolutions):** available if any single
-  segment is wanted standalone.
+- **Final lesson MP4 (1080p, 9:11, 54.7 MB):** rendered today, sent
+  separately.
+- **Per-segment MP4s (both resolutions):** packaged as
+  `selection_criterion_720p.zip` and `selection_criterion_1080p.zip`
+  -- 11 scene-wise MP4s plus the stitched full lesson in each.
 - **Engineering deep-dive:** `SELECTION_CRITERION_PIPELINE_DEEP_DIVE.md`.
 - **Full observations log for Run C:** `RUN_C_OBSERVATIONS.md`
   (includes T1 -> T1d iteration history so a new engineer can
