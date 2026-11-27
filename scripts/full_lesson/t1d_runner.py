@@ -151,34 +151,22 @@ def _generate_omni_video(client: GeminiClient, prompt: str, out_mp4: Path,
     out_mp4.write_bytes(result.video_bytes)
 
 
-def _make_subshot(slide_png: Path, narr_wav: Path, out_mp4: Path,
-                  width: int, height: int) -> float:
-    """Build one sub-shot MP4 with subtle Ken Burns zoom for life."""
+def _make_beat_start_subshot(slide_png: Path, narr_wav: Path, out_mp4: Path,
+                             width: int, height: int) -> float:
+    """Build a BEAT-START sub-shot: slide fades in from white over
+    0.5s, then holds for the rest of the narration. Gives the beat
+    an animated opening without needing an API call."""
     narr_sec = _probe_duration(narr_wav)
     total = LEAD_IN + narr_sec + TAIL
-    total_frames = int(total * FPS)
-
-    # Ken Burns: slow zoom from 1.0 -> 1.05 over the sub-shot.
-    # zoompan expects the input to be high-res; scale slightly larger
-    # first so the zoom doesn't degrade resolution. z gets evaluated
-    # per output frame, 'on' is the output frame index, 'd' is total.
-    zoom_start = 1.0
-    zoom_end = 1.05
-    upscale = 2  # scale input 2x before zoompan so output stays sharp
-
-    vfilter = (
-        f"scale={width*upscale}:{height*upscale},setsar=1:1,"
-        f"zoompan=z='{zoom_start}+({zoom_end}-{zoom_start})*on/{max(total_frames-1,1)}':"
-        f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-        f"d={total_frames}:s={width}x{height}:fps={FPS}"
-    )
+    FADE_IN = min(0.5, LEAD_IN + 0.2)  # fade can bleed slightly into narration
 
     _run_ffmpeg([
         "ffmpeg", "-y",
         "-loop", "1", "-i", str(slide_png),
         "-i", str(narr_wav),
         "-filter_complex",
-        f"[0:v]{vfilter}[v];"
+        f"[0:v]scale={width}:{height},setsar=1:1,"
+        f"fade=t=in:st=0:d={FADE_IN:.3f}:color=white[v];"
         f"[1:a]adelay={int(LEAD_IN*1000)}|{int(LEAD_IN*1000)},apad=pad_dur={TAIL}[a]",
         "-map", "[v]", "-map", "[a]",
         "-t", f"{total:.3f}",
@@ -187,7 +175,111 @@ def _make_subshot(slide_png: Path, narr_wav: Path, out_mp4: Path,
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart", str(out_mp4),
-    ], step="make_subshot")
+    ], step="make_beat_start_subshot")
+
+    return _probe_duration(out_mp4)
+
+
+def _make_animated_infographic_subshot(
+    client: GeminiClient, prev_slide_png: Path, edit_instruction: str,
+    narr_wav: Path, out_mp4: Path, workdir: Path, index: int,
+    width: int, height: int, omni_model: str,
+) -> float:
+    """Build an INTRA-BEAT sub-shot by running Omni edit on the
+    previous slide with the edit_instruction turned into an animation
+    prompt. Gives genuine element-level motion (card slides in, bar
+    grows, etc.) matching the slide-progression story.
+
+    Flow:
+      1. Loop prev_slide_png as a 10s silent video
+      2. Omni edit with an animation-framed version of edit_instruction
+      3. Trim Omni output to (LEAD_IN + narration + TAIL) seconds
+      4. Mux narration with LEAD_IN padding + TAIL
+    """
+    from scripts.full_lesson._shared import ANIMATE_PRESERVE
+
+    narr_sec = _probe_duration(narr_wav)
+    total = LEAD_IN + narr_sec + TAIL
+
+    # Step 1: build the Omni input video — a 10-second loop of the previous slide
+    prev_loop = workdir / f"omni_in_{index:02d}.mp4"
+    _run_ffmpeg([
+        "ffmpeg", "-y",
+        "-loop", "1", "-i", str(prev_slide_png),
+        "-t", "10", "-r", str(FPS),
+        "-vf", f"scale={width}:{height},setsar=1:1",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        "-pix_fmt", "yuv420p", "-tune", "stillimage",
+        str(prev_loop),
+    ], step="make_omni_input_loop")
+
+    # Step 2: Omni edit for element animation
+    animation_prompt = (
+        f"{ANIMATE_PRESERVE} "
+        f"Starting from the current slide state, animate the following change "
+        f"with smooth natural element-level motion (e.g. elements sliding in "
+        f"from below, fading in, or growing into place). The element should "
+        f"arrive within the first 1-2 seconds and then stay settled. Specific "
+        f"change: {edit_instruction}"
+    )
+    logger.info("  Omni edit (per-sub-shot animation)")
+    result = client.interactions_video(
+        model=omni_model,
+        instruction=animation_prompt,
+        task="edit",
+        video_bytes=prev_loop.read_bytes(),
+        video_mime_type="video/mp4",
+    )
+    if not result.video_bytes:
+        raise RuntimeError("Omni edit returned no video bytes")
+
+    omni_out = workdir / f"omni_out_{index:02d}.mp4"
+    omni_out.write_bytes(result.video_bytes)
+
+    # Step 3+4: trim Omni output to exactly (LEAD_IN + narration + TAIL)
+    # and mux narration; strip Omni's own audio by not mapping its audio.
+    _run_ffmpeg([
+        "ffmpeg", "-y",
+        "-i", str(omni_out),
+        "-i", str(narr_wav),
+        "-filter_complex",
+        f"[0:v]scale={width}:{height},setsar=1:1[v];"
+        f"[1:a]adelay={int(LEAD_IN*1000)}|{int(LEAD_IN*1000)},apad=pad_dur={TAIL}[a]",
+        "-map", "[v]", "-map", "[a]",
+        "-t", f"{total:.3f}",
+        "-r", str(FPS),
+        "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart", str(out_mp4),
+    ], step="make_animated_subshot_mux")
+
+    return _probe_duration(out_mp4)
+
+
+def _make_static_subshot(slide_png: Path, narr_wav: Path, out_mp4: Path,
+                         width: int, height: int) -> float:
+    """Build a STATIC sub-shot: slide held constant with no animation.
+    Used for 'hold' sub-shots where the plan explicitly says 'keep the
+    slide exactly the same' -- just narration over the unchanged image."""
+    narr_sec = _probe_duration(narr_wav)
+    total = LEAD_IN + narr_sec + TAIL
+
+    _run_ffmpeg([
+        "ffmpeg", "-y",
+        "-loop", "1", "-i", str(slide_png),
+        "-i", str(narr_wav),
+        "-filter_complex",
+        f"[0:v]scale={width}:{height},setsar=1:1[v];"
+        f"[1:a]adelay={int(LEAD_IN*1000)}|{int(LEAD_IN*1000)},apad=pad_dur={TAIL}[a]",
+        "-map", "[v]", "-map", "[a]",
+        "-t", f"{total:.3f}",
+        "-r", str(FPS),
+        "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+        "-pix_fmt", "yuv420p", "-tune", "stillimage",
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart", str(out_mp4),
+    ], step="make_static_subshot")
 
     return _probe_duration(out_mp4)
 
@@ -363,18 +455,46 @@ def run_segment(plan: SegmentPlanV2, *, resolution: str = "720p",
         narr_paths.append(narr_wav)
 
     # --- step 3: build sub-shot mp4s ---
+    # - Beat-start infographic: fade-in from white over the fresh slide
+    # - Intra-beat infographic with real change: Omni edit animates the
+    #   element arrival from the previous slide
+    # - Intra-beat infographic with a "hold" edit_instruction (text
+    #   starts with 'Keep the slide exactly'): static hold (no Omni call)
+    # - omni_realistic: Omni text_to_video with narration mux
     subshot_paths: list[Path] = []
     durations: list[float] = []
+    prev_slide_for_animation: Optional[Path] = None
     for i, (s, slide_png, omni_mp4, narr_wav) in enumerate(
         zip(plan.sub_shots, slide_paths, omni_paths, narr_paths), start=1
     ):
         subshot_mp4 = workdir / f"sub_{i:02d}.mp4"
         if s.kind == "infographic":
-            dur = _make_subshot(slide_png, narr_wav, subshot_mp4, width, height)
+            if s.is_beat_start:
+                # Fade in from white; no API call
+                dur = _make_beat_start_subshot(slide_png, narr_wav, subshot_mp4, width, height)
+                mode = "fade-in"
+                prev_slide_for_animation = slide_png
+            else:
+                instr = s.edit_instruction or s.slide or ""
+                is_hold = instr.strip().lower().startswith("keep the slide exactly")
+                if is_hold or prev_slide_for_animation is None:
+                    # No visible change; static hold
+                    dur = _make_static_subshot(slide_png, narr_wav, subshot_mp4, width, height)
+                    mode = "static-hold"
+                else:
+                    dur = _make_animated_infographic_subshot(
+                        client, prev_slide_for_animation, instr, narr_wav,
+                        subshot_mp4, workdir, i, width, height, omni_model,
+                    )
+                    mode = "omni-animate"
+                prev_slide_for_animation = slide_png
         else:  # omni_realistic
             dur = _make_omni_subshot(omni_mp4, narr_wav, subshot_mp4, width, height)
-        logger.info("[%s @ %s] sub-shot %d/%d: kind=%s dur=%.2fs",
-                    plan.output_name, resolution, i, len(plan.sub_shots), s.kind, dur)
+            mode = "omni-realistic"
+            prev_slide_for_animation = None  # reset: no chain across omni_realistic
+        logger.info("[%s @ %s] sub-shot %d/%d: kind=%s mode=%s dur=%.2fs",
+                    plan.output_name, resolution, i, len(plan.sub_shots),
+                    s.kind, mode, dur)
         subshot_paths.append(subshot_mp4)
         durations.append(dur)
 
@@ -389,15 +509,16 @@ def run_segment(plan: SegmentPlanV2, *, resolution: str = "720p",
         else:
             beats[-1].append(idx)
 
-    # --- step 5: concat each beat's sub-shots with visual xfade (or
-    # just copy if a beat has a single sub-shot, e.g. omni_realistic) ---
+    # --- step 5: concat each beat's sub-shots with hard cuts. Element
+    # animation now lives INSIDE each intra-beat sub-shot (via Omni
+    # edit), so an xfade at the boundary would double-blend and blur
+    # the hand-off. Omni's output for sub-shot n+1 starts from the
+    # same slide_n we just saw end sub-shot n, so hard-cuts are clean. ---
     beat_mp4s: list[Path] = []
     for b_idx, beat_indices in enumerate(beats, start=1):
         beat_group_paths = [subshot_paths[i] for i in beat_indices]
-        beat_group_durations = [durations[i] for i in beat_indices]
         beat_mp4 = workdir / f"beat_{b_idx:02d}.mp4"
-        _concat_group_with_xfade(beat_group_paths, beat_group_durations,
-                                 beat_mp4, width, height)
+        _concat_hard(beat_group_paths, beat_mp4)
         logger.info("[%s @ %s] beat %d/%d: assembled %d sub-shots",
                     plan.output_name, resolution, b_idx, len(beats),
                     len(beat_indices))
